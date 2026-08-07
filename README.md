@@ -128,27 +128,52 @@ https://ticketsystem-mrb.onrender.com/auth/callback
 
 (Statt `ticketsystem-mrb` deinen Namen eintragen, falls er schon vergeben ist.)
 
-### 4. Auf Render deployen
+### 4. Auf Render deployen (kostenlos, manuell)
+
+**Wichtig:** Die `render.yaml` (Blueprint) und Render-Cron-Jobs brauchen einen
+kostenpflichtigen Tarif. Auf dem **Free-Tier** legt man den Web-Service stattdessen
+manuell an – genauso kostenlos, ohne Kreditkarte:
 
 1. Konto auf https://render.com anlegen.
-2. **New → Blueprint** → dein GitHub-Repo auswählen.
-3. Render erkennt `render.yaml`. Beim ersten Deploy fragt es nach allen geheimen Werten (`sync: false`):
-   - `TURSO_URL` und `TURSO_AUTH_TOKEN` aus Schritt 2
+2. **New → Web Service** → dein GitHub-Repo `MRB-Ticket-Tool` auswählen.
+3. Einstellungen:
+   - **Name:** `ticketsystem-mrb` (oder etwas Eigenes)
+   - **Runtime:** Node
+   - **Region:** Frankfurt
+   - **Build Command:** `npm install`
+   - **Start Command:** `npm start`
+   - **Instance Type:** Free
+4. Unter **Environment** alle Variablen eintragen:
+   - `TURSO_URL` und `TURSO_AUTH_TOKEN` (aus Schritt 2)
+   - `SESSION_SECRET` (zufälliger String)
+   - `BASE_URL` → deine Deploy-URL, z. B. `https://ticketsystem-mrb.onrender.com`
    - `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET` aus dem Developer Portal
-   - `DISCORD_REDIRECT_URI` auf die Deploy-URL setzen
+   - `DISCORD_REDIRECT_URI` → `https://ticketsystem-mrb.onrender.com/auth/callback`
    - `DISCORD_GUILD_ID` (optional, Server-Pflicht) und `DISCORD_INVITE_URL`
    - `AUTHORIZED_DISCORD_USERNAMES` (deine HR-HR-Namen, z. B. `jlg09`)
    - `SMTP_*` (optional, für echte E-Mails z. B. Brevo)
-4. **Deploy** starten.
+5. **Deploy** starten.
 
 **Wichtig:** Trage nach dem ersten Deploy überall die echte URL ein (in `BASE_URL`
 und `DISCORD_REDIRECT_URI`), falls sie von `ticketsystem-mrb.onrender.com` abweicht.
 
-### 5. Schlafen verhindern (schon erledigt)
+### 5. Schlafen verhindern (kostenlos)
 
-In `render.yaml` ist ein **Keep-Awake-Cron** enthalten, der alle 10 Minuten
-`/healthz` aufruft. Damit schläft die kostenlose Instanz nicht ein und bleibt
-24/7 erreichbar.
+Render-Instanzen schlafen nach 15 Minuten ohne Anfragen ein. Da Render-Cron auf
+dem Free-Tier nicht verfügbar ist, nutzt man einen **externen kostenlosen
+Uptime-Monitor**, der die Seite alle 5 Minuten abfragt (hält sie dadurch wach,
+ohne Kreditkarte). Empfehlung: **UptimeRobot** (https://uptimerobot.com).
+
+1. Konto auf UptimeRobot anlegen (kostenlos, kein Zahlungsmittel nötig).
+2. **New Monitor** → Typ **HTTP(s)**:
+   - Friendly Name: `TicketSystem MRB`
+   - URL: `https://ticketsystem-mrb.onrender.com/healthz`
+   - Interval: 5 Minuten
+   - Alert Contact: optional deine E-Mail
+3. Speichern. Ab jetzt bleibt die Seite 24/7 erreichbar.
+
+Ein einzelner Web-Service verbraucht ~720 Stunden/Monat und bleibt damit unter
+den **750 kostenlosen Rechenstunden** pro Monat.
 
 ## Hinweise
 
