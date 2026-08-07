@@ -1,0 +1,17 @@
+<%- include('partials/head', { title, user, isHR, isHRHR, currentPath }) %>
+
+  <div class="error-page">
+    <div class="error-code"><%= code || 500 %></div>
+    <h1><%= title %></h1>
+    <p class="muted"><%= message %></p>
+    <div class="btn-group" style="justify-content:center; margin-top:20px;">
+      <% if (typeof joinUrl !== 'undefined' && joinUrl) { %>
+        <a class="btn btn-discord btn-lg" href="<%= joinUrl %>" target="_blank" rel="noopener">
+          Discord-Server beitreten
+        </a>
+      <% } %>
+      <a class="btn btn-ghost btn-lg" href="/">Zur Startseite</a>
+    </div>
+  </div>
+
+<%- include('partials/footer') %>

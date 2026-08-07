@@ -1,0 +1,83 @@
+<%- include('partials/head', { title, user, isHR, isHRHR, currentPath }) %>
+
+  <div class="page-head">
+    <div>
+      <h1>Audit-Log</h1>
+      <p class="muted">Vollständiges Protokoll aller Konto- und Ticket-Aktionen. Nur für festgelegte HR-HR.</p>
+    </div>
+    <div class="btn-group">
+      <a class="btn btn-ghost" href="/admin/accounts">HR-Verwaltung</a>
+      <a class="btn btn-ghost" href="/admin">Alle Tickets</a>
+    </div>
+  </div>
+
+  <div class="card">
+    <form method="get" action="/admin/logs" class="filter-form">
+      <div class="form-group">
+        <label for="filter">Filter</label>
+        <select name="filter" id="filter">
+          <option value="all" <%= filter === 'all' ? 'selected' : '' %>>Alle</option>
+          <option value="account" <%= filter === 'account' ? 'selected' : '' %>>Nur Konto-Aktionen</option>
+          <option value="ticket" <%= filter === 'ticket' ? 'selected' : '' %>>Nur Ticket-Aktionen</option>
+        </select>
+      </div>
+      <div class="form-group filter-actions">
+        <button type="submit" class="btn btn-primary">Filtern</button>
+        <a class="btn btn-ghost" href="/admin/logs">Zurücksetzen</a>
+      </div>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>Ticket-Aktionen</h2>
+    <% if (ticketLogs.length === 0) { %>
+      <p class="muted">Noch keine Ticket-Aktionen protokolliert.</p>
+    <% } else { %>
+      <table class="table">
+        <thead>
+          <tr><th>Zeit</th><th>Ticket</th><th>Aktion</th><th>Durch</th><th>Details</th></tr>
+        </thead>
+        <tbody>
+          <% ticketLogs.forEach((l) => { %>
+            <tr>
+              <td class="muted small"><%= fmtDate(l.created_at) %></td>
+              <td>
+                <% if (l.ticket_number) { %>
+                  <a class="mono" href="/tickets/<%= l.ticket_id %>">#<%= String(l.ticket_number).padStart(4, '0') %></a>
+                <% } else { %>–<% } %>
+              </td>
+              <td><span class="tag log-<%= l.action %>"><%= l.action %></span></td>
+              <td><%= l.actor_global || l.actor_name || '–' %></td>
+              <td class="small"><%= l.details || '–' %></td>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    <% } %>
+  </div>
+
+  <div class="card">
+    <h2>Konto-Aktionen</h2>
+    <% if (accountLogs.length === 0) { %>
+      <p class="muted">Noch keine Konto-Aktionen protokolliert.</p>
+    <% } else { %>
+      <table class="table">
+        <thead>
+          <tr><th>Zeit</th><th>Aktion</th><th>Konto</th><th>Durch</th><th>Details</th></tr>
+        </thead>
+        <tbody>
+          <% accountLogs.forEach((l) => { %>
+            <tr>
+              <td class="muted small"><%= fmtDate(l.created_at) %></td>
+              <td><span class="tag log-<%= l.action %>"><%= l.action %></span></td>
+              <td><%= l.account_name || '–' %></td>
+              <td><%= l.actor_global || l.actor_name || '–' %></td>
+              <td class="small"><%= l.reason || '–' %></td>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    <% } %>
+  </div>
+
+<%- include('partials/footer') %>

@@ -1,0 +1,79 @@
+<%- include('partials/head', { title, user, isHR, isHRHR, currentPath }) %>
+
+  <div class="page-head">
+    <div>
+      <h1>Meine Tickets</h1>
+      <p class="muted">Hallo <strong><%= user.global_name || user.username %></strong>! Hier findest du alle deine Anfragen.</p>
+    </div>
+    <a class="btn btn-primary" href="/tickets/new">+ Neues Ticket</a>
+  </div>
+
+  <div class="quickjump card">
+    <form method="post" action="/dashboard/jump" class="quickjump-form">
+      <label for="quickNumber" class="quickjump-label">Schnellsprung zu Ticketnummer:</label>
+      <div class="quickjump-row">
+        <input type="text" id="quickNumber" name="number" value="<%= quickNumber || '' %>" placeholder="z. B. 0042" class="input quickjump-input" inputmode="numeric">
+        <button type="submit" class="btn btn-secondary">Öffnen</button>
+      </div>
+      <% if (quickError) { %>
+        <p class="alert alert-error quickjump-error"><%= quickError %></p>
+      <% } %>
+    </form>
+  </div>
+
+  <div class="stat-grid">
+    <div class="stat-card">
+      <span class="stat-value"><%= myTickets.length %></span>
+      <span class="stat-label">Alle Tickets</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-value"><%= openCount %></span>
+      <span class="stat-label">Offen / In Bearbeitung</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-value"><%= myTickets.length - openCount %></span>
+      <span class="stat-label">Geschlossen</span>
+    </div>
+  </div>
+
+  <% if (myTickets.length === 0) { %>
+    <div class="empty-state">
+      <div class="empty-icon">🎫</div>
+      <h2>Noch keine Tickets</h2>
+      <p class="muted">Du hast noch kein Ticket erstellt. Erstelle dein erstes Support-Ticket!</p>
+      <a class="btn btn-primary" href="/tickets/new">Erstes Ticket erstellen</a>
+    </div>
+  <% } else { %>
+    <div class="card">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Nr.</th>
+            <th>Betreff</th>
+            <th>Kategorie</th>
+            <th>Status</th>
+            <th>Fällig</th>
+            <th>Letzte Aktivität</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% myTickets.forEach((t) => { %>
+            <% const od = isOverdue(t); %>
+            <tr class="clickable <%= od ? 'row-overdue' : '' %>" onclick="window.location='/tickets/<%= t.id %>'">
+              <td class="mono">#<%= String(t.number).padStart(4, '0') %></td>
+              <td class="td-subject"><%= t.subject %></td>
+              <td><span class="tag tag-cat"><%= t.category %></span></td>
+              <td>
+                <span class="tag status-<%= t.status %>"><%= statusLabel(t.status) %></span>
+                <% if (od) { %><span class="badge badge-overdue">Überfällig</span><% } %>
+              </td>
+              <td class="muted small"><%= fmtDate(t.due_at) %></td>
+              <td class="muted small"><%= fmtDate(t.updated_at) %></td>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    </div>
+  <% } %>
+
+<%- include('partials/footer') %>

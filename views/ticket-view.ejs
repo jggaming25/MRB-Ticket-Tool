@@ -1,0 +1,245 @@
+<%- include('partials/head', { title, user, isHR, isHRHR, currentPath }) %>
+
+  <% const od = isOverdue(ticket); %>
+
+  <div class="page-head">
+    <div>
+      <a class="btn btn-ghost btn-sm" href="<%= isHR ? '/admin' : '/dashboard' %>">← Zurück</a>
+      <h1 class="mt-sm">
+        Ticket #<%= String(ticket.number).padStart(4, '0') %>
+        <span class="tag status-<%= ticket.status %>"><%= statusLabel(ticket.status) %></span>
+        <% if (od) { %><span class="badge badge-overdue">Überfällig</span><% } %>
+      </h1>
+    </div>
+    <div class="btn-group">
+      <% if (canClaim) { %>
+        <form method="post" action="/admin/tickets/<%= ticket.id %>/claim" class="inline-form">
+          <button type="submit" class="btn btn-primary">Übernehmen</button>
+        </form>
+      <% } %>
+      <% if (canUnclaim) { %>
+        <form method="post" action="/admin/tickets/<%= ticket.id %>/unclaim" class="inline-form">
+          <button type="submit" class="btn btn-ghost">Übernahme abgeben</button>
+        </form>
+      <% } %>
+      <% if (canRelease) { %>
+        <button type="button" class="btn btn-secondary" data-open="#releasePanel">Freigabe zur Schließung</button>
+      <% } %>
+      <% if (canClose) { %>
+        <form method="post" action="/tickets/<%= ticket.id %>/close" class="inline-form"
+              onsubmit="return confirm('Ticket wirklich schließen? Nur HR-HR kann das rückgängig machen.');">
+          <button type="submit" class="btn btn-danger">Ticket schließen</button>
+        </form>
+      <% } %>
+      <% if (canReopen) { %>
+        <form method="post" action="/tickets/<%= ticket.id %>/reopen" class="inline-form"
+              onsubmit="return confirm('Ticket wieder öffnen?');">
+          <button type="submit" class="btn btn-primary">Wieder öffnen</button>
+        </form>
+      <% } %>
+    </div>
+  </div>
+
+  <% if (canRelease) { %>
+    <div class="panel panel-collapsible hidden" id="releasePanel">
+      <div class="card">
+        <h3>Freigabe zur Schließung beantragen</h3>
+        <p class="hint">Beschreibe, was du zur Lösung des Tickets erledigt hast. Danach entscheidet HR-HR über das Schließen.</p>
+        <form method="post" action="/admin/tickets/<%= ticket.id %>/release">
+          <div class="form-group">
+            <label for="release-report">Abschlussbericht</label>
+            <textarea id="release-report" name="report" rows="4" required placeholder="Was wurde erledigt? Welche Lösung wurde umgesetzt?"></textarea>
+          </div>
+          <button type="submit" class="btn btn-secondary">Zur Freigabe vorlegen</button>
+        </form>
+      </div>
+    </div>
+  <% } %>
+
+  <div class="ticket-layout">
+    <div class="ticket-main">
+      <div class="card ticket-meta">
+        <h2><%= ticket.subject %></h2>
+        <div class="meta-row">
+          <span class="tag tag-cat"><%= ticket.category %></span>
+          <% if (claimedBy) { %>
+            <span class="tag tag-claimed"><%= claimedBy.global_name || claimedBy.username %> übernimmt dieses Ticket</span>
+          <% } %>
+          <span class="muted small">Erstellt am <%= fmtDate(ticket.created_at) %></span>
+        </div>
+        <div class="meta-row">
+          <% if (ticket.due_at) { %>
+            <span class="muted small">Fällig: <strong><%= fmtDate(ticket.due_at) %></strong><% if (od) { %> <span class="badge badge-overdue">Überfällig</span><% } %></span>
+          <% } %>
+          <% if (ticket.next_action) { %>
+            <span class="tag tag-action">Nächste Aktion: <%= ticket.next_action %></span>
+          <% } %>
+        </div>
+        <% if (claimedBy && !canEdit && !isHR) { %>
+          <div class="alert claim-notice">
+            Dieses Ticket wurde von <strong><%= claimedBy.global_name || claimedBy.username %></strong> übernommen und wird gerade bearbeitet.
+          </div>
+        <% } %>
+      </div>
+
+      <div class="thread" id="last">
+        <% messages.forEach((m) => { %>
+          <% const mine = m.user_id === user.id; %>
+          <div class="msg <%= m.is_system ? 'msg-system' : (mine ? 'msg-mine' : 'msg-other') %>" id="msg-<%= m.id %>">
+            <% if (!m.is_system) { %>
+              <img class="msg-avatar" src="<%= m.avatar ? 'https://cdn.discordapp.com/avatars/' + m.discord_id + '/' + m.avatar + '.png?size=64' : '/static/img/placeholder.svg' %>" alt="" onerror="this.src='/static/img/placeholder.svg'">
+            <% } %>
+            <div class="msg-body">
+              <% if (!m.is_system) { %>
+                <div class="msg-head">
+                  <span class="msg-author">
+                    <%= m.global_name || m.username %>
+                    <% if (m.role === 'hrhr') { %><span class="badge badge-hrhr">HR-HR</span><% } else if (m.role === 'hr') { %><span class="badge badge-hr">HR</span><% } %>
+                    <% if (m.author_role === 'user' && m.user_id === user.id) { %><span class="badge">Du</span><% } %>
+                  </span>
+                  <span class="muted small"><%= fmtDate(m.created_at) %></span>
+                </div>
+              <% } %>
+              <div class="msg-text"><%= m.body %></div>
+              <% if (m.attachment) { %>
+                <% const fname = m.attachment_name || m.attachment.split('_').slice(1).join('_'); %>
+                <% const ext = fname.split('.').pop().toLowerCase(); %>
+                <% const isImage = ['png','jpg','jpeg','gif','webp'].includes(ext); %>
+                <div class="attachment">
+                  <% if (isImage) { %>
+                    <a href="/file/<%= ticket.id %>/<%= m.id %>/<%= encodeURIComponent(fname) %>" target="_blank">
+                      <img class="attachment-preview" src="/file/<%= ticket.id %>/<%= m.id %>/<%= encodeURIComponent(fname) %>" alt="<%= fname %>">
+                    </a>
+                  <% } %>
+                  <a class="btn btn-ghost btn-sm" href="/file/<%= ticket.id %>/<%= m.id %>/<%= encodeURIComponent(fname) %>">
+                    📎 <%= fname %>
+                  </a>
+                </div>
+              <% } %>
+            </div>
+          </div>
+        <% }) %>
+      </div>
+
+      <% if (ticket.status === 'closed') { %>
+        <div class="alert">
+          Dieses Ticket ist geschlossen. Es wurde von HR-HR abgeschlossen.
+        </div>
+      <% } else if (ticket.status === 'release') { %>
+        <div class="alert alert-info">
+          Dieses Ticket ist zur <strong>Freigabe zur Schließung</strong> vorgelegt und wird von HR-HR geprüft. Es kann weiterhin geantwortet werden.
+        </div>
+      <% } else if (canEdit) { %>
+        <div class="card reply-card">
+          <h3>Antworten</h3>
+          <form method="post" action="/tickets/<%= ticket.id %>/message" enctype="multipart/form-data" id="reply-form">
+            <div class="form-group">
+              <textarea id="reply-body" name="body" rows="4" placeholder="Schreibe deine Antwort ..." data-autosave="reply:<%= ticket.id %>"></textarea>
+              <p class="hint">Der Entwurf wird alle 30 Sekunden automatisch gespeichert.</p>
+            </div>
+            <div class="form-row reply-actions">
+              <div class="form-group file-field">
+                <label class="btn btn-ghost" for="attachment">
+                  📎 Datei anhängen
+                </label>
+                <input type="file" id="attachment" name="attachment" accept=".png,.jpg,.jpeg,.gif,.webp,.pdf,.txt,.md,.json,.zip">
+                <span class="hint" id="file-name"></span>
+              </div>
+              <button type="submit" class="btn btn-primary">Senden</button>
+            </div>
+            <p class="hint">Max. 5 MB pro Datei (PNG, JPG, GIF, WebP, PDF, TXT, MD, JSON, ZIP).</p>
+          </form>
+        </div>
+      <% } else if (!isHR) { %>
+        <div class="alert">
+          Dieses Ticket wird derzeit von einem Mitarbeiter bearbeitet. Du kannst es nur ansehen.
+        </div>
+      <% } %>
+    </div>
+
+    <% if (isHR && canEdit) { %>
+      <aside class="ticket-side">
+        <div class="card">
+          <h3>Ticket-Info</h3>
+          <div class="ticket-info">
+            <div class="info-row"><span>Ticket-Nr.</span><span class="mono">#<%= String(ticket.number).padStart(4, '0') %></span></div>
+            <div class="info-row"><span>Erstellt</span><span><%= fmtDate(ticket.created_at) %></span></div>
+            <div class="info-row"><span>Letzte Aktivität</span><span><%= fmtDate(ticket.updated_at) %></span></div>
+            <div class="info-row"><span>Fällig</span><span><%= fmtDate(ticket.due_at) %></span></div>
+            <div class="info-row"><span>Nächste Aktion</span><span><%= ticket.next_action || '–' %></span></div>
+            <div class="info-row"><span>Übernommen von</span><span><%= claimedBy ? (claimedBy.global_name || claimedBy.username) : '–' %></span></div>
+            <div class="info-row"><span>Geschlossen</span><span><%= fmtDate(ticket.closed_at) %></span></div>
+          </div>
+        </div>
+
+        <% if (canSetDue) { %>
+          <div class="card">
+            <h3>Fälligkeit & nächste Aktion</h3>
+            <form method="post" action="/admin/tickets/<%= ticket.id %>/due">
+              <div class="form-group">
+                <label for="due-hours">In X Stunden fällig</label>
+                <input class="input" type="number" id="due-hours" name="hours" min="1" max="720" value="24" required>
+              </div>
+              <div class="form-group">
+                <label for="due-action">Nächste Aktion</label>
+                <select class="input" id="due-action" name="next_action">
+                  <option value="">– keine –</option>
+                  <% nextActions.forEach((a) => { %>
+                    <option value="<%= a %>" <%= ticket.next_action === a ? 'selected' : '' %>><%= a %></option>
+                  <% }) %>
+                </select>
+              </div>
+              <button type="submit" class="btn btn-secondary btn-sm">Speichern</button>
+            </form>
+          </div>
+        <% } %>
+
+        <% if (ticket.status !== 'closed' && staffUsers.length > 0) { %>
+          <div class="card">
+            <h3>Ticket übergeben</h3>
+            <form method="post" action="/admin/tickets/<%= ticket.id %>/transfer">
+              <div class="form-group">
+                <label for="transfer-assignee">Neuer Bearbeiter</label>
+                <select class="input" id="transfer-assignee" name="assignee" required>
+                  <option value="">– wählen –</option>
+                  <% staffUsers.forEach((s) => { %>
+                    <option value="<%= s.id %>"><%= s.global_name || s.username %><%= s.role === 'hrhr' ? ' (HR-HR)' : ' (HR)' %></option>
+                  <% }) %>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="transfer-reason">Begründung</label>
+                <textarea class="input" id="transfer-reason" name="reason" rows="3" required placeholder="Warum übergibst du das Ticket?"></textarea>
+              </div>
+              <button type="submit" class="btn btn-secondary btn-sm" onclick="return confirm('Ticket wirklich übergeben?')">Übergeben</button>
+            </form>
+          </div>
+        <% } %>
+      </aside>
+    <% } %>
+  </div>
+
+  <div class="card audit-log">
+    <h3>Audit-Log</h3>
+    <% if (logs.length === 0) { %>
+      <p class="muted">Noch keine Einträge.</p>
+    <% } else { %>
+      <table class="table table-compact">
+        <thead>
+          <tr><th>Zeit</th><th>Wer</th><th>Aktion</th><th>Details</th></tr>
+        </thead>
+        <tbody>
+          <% logs.forEach((l) => { %>
+            <tr>
+              <td class="muted small"><%= fmtDate(l.created_at) %></td>
+              <td><%= l.actor_global || l.actor_name || 'System' %></td>
+              <td><span class="tag"><%= l.action %></span></td>
+              <td class="muted small"><%= l.details || '' %></td>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    <% } %>
+  </div>
+
+<%- include('partials/footer') %>

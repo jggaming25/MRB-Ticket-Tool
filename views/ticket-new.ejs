@@ -1,0 +1,60 @@
+<%- include('partials/head', { title, user, isHR, isHRHR, currentPath }) %>
+
+  <div class="page-head">
+    <div>
+      <h1>Neues Ticket</h1>
+      <p class="muted">Beschreibe dein Anliegen – unser Team meldet sich möglichst schnell.</p>
+    </div>
+    <a class="btn btn-ghost" href="/">← Zurück</a>
+  </div>
+
+  <% if (errors && errors.length) { %>
+    <div class="alert alert-error">
+      <strong>Bitte korrigiere folgende Punkte:</strong>
+      <ul>
+        <% errors.forEach((e) => { %><li><%= e %></li><% }) %>
+      </ul>
+    </div>
+  <% } %>
+
+  <div class="card">
+    <form method="post" action="/tickets" id="ticket-form" enctype="multipart/form-data">
+      <div class="form-row">
+        <div class="form-group grow">
+          <label for="subject">Betreff *</label>
+          <input type="text" id="subject" name="subject" maxlength="120" required
+                 placeholder="Kurz und präzise, z.B. „Kann mich nicht einloggen“"
+                 value="<%= values ? values.subject : '' %>">
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="category">Kategorie *</label>
+          <select id="category" name="category" required>
+            <% categories.forEach((c) => { %>
+              <option value="<%= c %>" <%= values && values.category === c ? 'selected' : '' %>><%= c %></option>
+            <% }) %>
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label for="body">Beschreibung *</label>
+        <textarea id="body" name="body" rows="8" required minlength="5"
+                  placeholder="Was ist passiert? Was hast du bereits versucht?"><%= values ? values.body : '' %></textarea>
+        <p class="hint">Bitte möglichst viele Details angeben, damit wir schneller helfen können.</p>
+      </div>
+      <div class="form-group file-field">
+        <label class="btn btn-ghost" for="attachment">
+          📎 Datei anhängen
+        </label>
+        <input type="file" id="attachment" name="attachment" accept=".png,.jpg,.jpeg,.gif,.webp,.pdf,.txt,.md,.json,.zip">
+        <span class="hint" id="file-name"></span>
+      </div>
+      <p class="hint">Max. 5 MB pro Datei (PNG, JPG, GIF, WebP, PDF, TXT, MD, JSON, ZIP).</p>
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary btn-lg">Ticket erstellen</button>
+      </div>
+    </form>
+  </div>
+
+<%- include('partials/footer') %>

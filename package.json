@@ -1,0 +1,26 @@
+{
+  "name": "ticketsystem-mrb",
+  "version": "1.0.0",
+  "description": "Discord-basiertes Ticketsystem mit OAuth2-Login, Admin-Panel und Support-Verwaltung",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node test-flow.js"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.2",
+    "dotenv": "^16.4.5",
+    "ejs": "^3.1.10",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.4.1",
+    "express-session": "^1.18.1",
+    "helmet": "^8.0.0",
+    "libsql": "^0.5.29",
+    "multer": "^2.0.2",
+    "nodemailer": "^9.0.4"
+  }
+}

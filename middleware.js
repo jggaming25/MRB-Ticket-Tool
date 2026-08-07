@@ -1,0 +1,176 @@
+'use strict';
+
+const { db } = require('./db');
+const config = require('./config');
+
+const ROLE_LABELS = { user: 'Nutzer', hr: 'HR', hrhr: 'HR-HR' };
+const STATUS_LABELS = {
+  active: 'Aktiv',
+  invited: 'Eingeladen',
+  pending_password: 'Passwort ausstehend',
+  pending_setup: 'Setup ausstehend',
+  pending_email: 'E-Mail ausstehend',
+  disabled: 'Deaktiviert',
+  deleted: 'Gelöscht',
+};
+
+const TICKET_STATUS_LABELS = {
+  open: 'Offen',
+  pending: 'In Bearbeitung',
+  release: 'Freigabe zur Schließung',
+  closed: 'Geschlossen',
+};
+
+function isHR(u) {
+  return !!(u && (u.role === 'hr' || u.role === 'hrhr'));
+}
+
+function isHRHR(u) {
+  return !!(u && u.role === 'hrhr');
+}
+
+// "Im Script festgelegte" HR-HR (kommen aus AUTHORIZED_DISCORD_USERNAMES):
+// einzige Nutzer mit Zugriff auf Account-Verwaltung, Logs und Rechtevergabe.
+function isRoot(u) {
+  return !!(u && u.role === 'hrhr' && u.is_root === 1);
+}
+
+function isActive(u) {
+  return !!(u && u.status === 'active');
+}
+
+// Ticket ist ueberfaellig, wenn das Fälligkeitsdatum in der Vergangenheit
+// liegt und das Ticket nicht geschlossen ist.
+function isOverdue(ticket) {
+  return !!(ticket && ticket.due_at && ticket.status !== 'closed' && new Date(ticket.due_at) < new Date());
+}
+
+// Bearbeiten-Recht fuer ein Ticket: Wenn das Ticket geclaimt wurde, darf
+// ausschliesslich der Claimer es bearbeiten. Ungeclaimt: HR/HR-HR oder der Ersteller.
+function canEditTicket(user, ticket) {
+  if (!user || !ticket) return false;
+  if (ticket.claimed_by) return user.id === ticket.claimed_by;
+  return isHR(user) || ticket.user_id === user.id;
+}
+
+function loadUser(req, res, next) {
+  if (req.session.userId) {
+    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.session.userId);
+    req.user = user || null;
+    if (!user) req.session.destroy(() => {});
+  }
+  res.locals.user = req.user || null;
+  res.locals.isHR = isHR(req.user);
+  res.locals.isHRHR = isHRHR(req.user);
+  res.locals.isRoot = isRoot(req.user);
+  res.locals.roleLabel = (r) => ROLE_LABELS[r] || r;
+  res.locals.statusLabel = (s) => STATUS_LABELS[s] || s;
+  next();
+}
+
+function requireLogin(req, res, next) {
+  if (!req.user) return res.redirect('/login');
+  next();
+}
+
+function requireHR(req, res, next) {
+  if (!req.user) return res.redirect('/login');
+  if (!isHR(req.user)) {
+    return res.status(403).render('error', {
+      title: 'Kein Zugriff',
+      message: 'Du hast keine Berechtigung fuer diese Seite. Nur HR-Mitarbeiter duerfen Tickets bearbeiten.',
+      code: 403,
+    });
+  }
+  next();
+}
+
+function requireHRHR(req, res, next) {
+  if (!req.user) return res.redirect('/login');
+  if (!isHRHR(req.user)) {
+    return res.status(403).render('error', {
+      title: 'Kein Zugriff',
+      message: 'Nur HR-HR-Accounts duerfen die HR-Verwaltung nutzen.',
+      code: 403,
+    });
+  }
+  next();
+}
+
+// Nur im Script festgelegte HR-HR (is_root) duerfen Account-Verwaltung,
+// Logs und Rechtevergabe nutzen.
+function requireRoot(req, res, next) {
+  if (!req.user) return res.redirect('/login');
+  if (!isRoot(req.user)) {
+    return res.status(403).render('error', {
+      title: 'Kein Zugriff',
+      message: 'Diese Seite ist nur fuer festgelegte HR-HR-Accounts (aus der Konfiguration) freigegeben.',
+      code: 403,
+    });
+  }
+  next();
+}
+
+// Nutzer, die ihren Onboarding-Prozess noch nicht abgeschlossen haben,
+// werden zur jeweiligen Seite weitergeleitet.
+function onboardingGuard(req, res, next) {
+  if (!req.user) return next();
+  if (req.path.startsWith('/onboard') || req.path.startsWith('/auth') || req.path === '/logout') {
+    return next();
+  }
+  switch (req.user.status) {
+    case 'invited': return res.redirect('/onboard/otp');
+    case 'pending_password': return res.redirect('/onboard/password');
+    case 'pending_setup': return res.redirect('/onboard/setup');
+    case 'pending_email': return res.redirect('/onboard/verify');
+    case 'disabled':
+    case 'deleted':
+      req.session.destroy(() => {});
+      return res.redirect('/login');
+    default:
+      return next();
+  }
+}
+
+function categories() {
+  return config.categories;
+}
+
+function nextActions() {
+  return config.nextActions;
+}
+
+function priorities() {
+  return ['low', 'medium', 'high', 'urgent'];
+}
+
+function priorityLabel(p) {
+  return { low: 'Niedrig', medium: 'Mittel', high: 'Hoch', urgent: 'Kritisch' }[p] || p;
+}
+
+function statusLabel(s) {
+  return TICKET_STATUS_LABELS[s] || s;
+}
+
+module.exports = {
+  loadUser,
+  requireLogin,
+  requireHR,
+  requireHRHR,
+  requireRoot,
+  onboardingGuard,
+  isHR,
+  isHRHR,
+  isRoot,
+  isActive,
+  canEditTicket,
+  isOverdue,
+  categories,
+  nextActions,
+  priorities,
+  priorityLabel,
+  statusLabel,
+  ROLE_LABELS,
+  STATUS_LABELS,
+  TICKET_STATUS_LABELS,
+};

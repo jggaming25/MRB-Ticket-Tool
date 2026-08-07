@@ -1,0 +1,132 @@
+<%- include('partials/head', { title, user, isHR, isHRHR, currentPath }) %>
+
+  <div class="page-head">
+    <div>
+      <h1>Alle Tickets</h1>
+      <p class="muted">Alle Support-Tickets auf einen Blick – HR und HR-HR.</p>
+    </div>
+    <div class="btn-group">
+      <a class="btn btn-ghost" href="/admin/export.csv?status=<%= filters.status %>&category=<%= filters.category %>&search=<%= encodeURIComponent(filters.search) %>">⬇ CSV-Export</a>
+    </div>
+  </div>
+
+  <div class="stat-grid">
+    <div class="stat-card">
+      <span class="stat-value"><%= stats.open %></span>
+      <span class="stat-label">Offen / Überfällig</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-value"><%= stats.claimed %></span>
+      <span class="stat-label">Übernommen</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-value"><%= stats.pending %></span>
+      <span class="stat-label">In Bearbeitung</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-value <%= stats.overdue > 0 ? 'stat-warning' : '' %>"><%= stats.overdue %></span>
+      <span class="stat-label">Überfällig</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-value"><%= stats.release %></span>
+      <span class="stat-label">Freigabe</span>
+    </div>
+    <div class="stat-card">
+      <span class="stat-value"><%= stats.closed %></span>
+      <span class="stat-label">Geschlossen</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <form method="get" action="/admin" class="filter-form">
+      <div class="form-group">
+        <label for="status">Status</label>
+        <select name="status" id="status">
+          <option value="all" <%= filters.status === 'all' ? 'selected' : '' %>>Alle</option>
+          <option value="open" <%= filters.status === 'open' ? 'selected' : '' %>>Offen</option>
+          <option value="pending" <%= filters.status === 'pending' ? 'selected' : '' %>>In Bearbeitung</option>
+          <option value="release" <%= filters.status === 'release' ? 'selected' : '' %>>Freigabe zur Schließung</option>
+          <option value="overdue" <%= filters.status === 'overdue' ? 'selected' : '' %>>Überfällig</option>
+          <option value="closed" <%= filters.status === 'closed' ? 'selected' : '' %>>Geschlossen</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="category">Kategorie</label>
+        <select name="category" id="category">
+          <option value="all" <%= filters.category === 'all' ? 'selected' : '' %>>Alle</option>
+          <% categories.forEach((c) => { %>
+            <option value="<%= c %>" <%= filters.category === c ? 'selected' : '' %>><%= c %></option>
+          <% }) %>
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="overdue">Überfällig</label>
+        <select name="overdue" id="overdue">
+          <option value="0" <%= !filters.overdue ? 'selected' : '' %>>Egal</option>
+          <option value="1" <%= filters.overdue ? 'selected' : '' %>>Nur überfällige</option>
+        </select>
+      </div>
+      <div class="form-group grow">
+        <label for="search">Suche</label>
+        <input type="text" name="search" id="search" placeholder="Nr., Betreff oder Stichwort ..." value="<%= filters.search %>">
+      </div>
+      <div class="form-group filter-actions">
+        <button type="submit" class="btn btn-primary">Filtern</button>
+        <a class="btn btn-ghost" href="/admin">Zurücksetzen</a>
+      </div>
+    </form>
+  </div>
+
+  <% if (tickets.length === 0) { %>
+    <div class="empty-state">
+      <div class="empty-icon">📭</div>
+      <h2>Keine Tickets</h2>
+      <p class="muted">Für diese Filterkombination gibt es keine Tickets.</p>
+    </div>
+  <% } else { %>
+    <div class="card">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>Nr.</th>
+            <th>Betreff</th>
+            <th>Nutzer</th>
+            <th>Kategorie</th>
+            <th>Status</th>
+            <th>Übernommen von</th>
+            <th>Fällig</th>
+            <th>Aktivität</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% tickets.forEach((t) => { %>
+            <% const tOd = isOverdue(t); %>
+            <tr class="clickable <%= tOd ? 'row-overdue' : '' %>" onclick="window.location='/tickets/<%= t.id %>'">
+              <td class="mono">#<%= String(t.number).padStart(4, '0') %></td>
+              <td class="td-subject"><%= t.subject %></td>
+              <td>
+                <% if (t.owner_avatar) { %><img class="mini-avatar" src="https://cdn.discordapp.com/avatars/<%= t.owner_discord_id %>/<%= t.owner_avatar %>.png?size=64" onerror="this.style.display='none'"><% } %>
+                <%= t.owner_global_name || t.owner_username %>
+              </td>
+              <td><span class="tag tag-cat"><%= t.category %></span></td>
+              <td>
+                <span class="tag status-<%= t.status %>"><%= statusLabel(t.status) %></span>
+                <% if (tOd) { %><span class="badge badge-overdue">Überfällig</span><% } %>
+              </td>
+              <td>
+                <% if (t.claimed_username) { %>
+                  <span class="tag tag-claimed"><%= t.claimed_global_name || t.claimed_username %></span>
+                <% } else { %>
+                  <span class="muted">–</span>
+                <% } %>
+              </td>
+              <td class="muted small <%= tOd ? 'td-overdue' : '' %>"><%= fmtDate(t.due_at) %></td>
+              <td class="muted small"><%= fmtDate(t.updated_at) %></td>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    </div>
+  <% } %>
+
+<%- include('partials/footer') %>

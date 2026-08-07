@@ -1,0 +1,24 @@
+<%- include('partials/head', { title, user, isHR, isHRHR, currentPath }) %>
+
+  <div class="login-page">
+    <div class="login-card">
+      <div class="login-logo">🎟️</div>
+      <h1>Einmalpasswort eingeben</h1>
+      <p class="muted">Dein Discord-Konto wurde erfolgreich verifiziert. Jetzt fehlt noch das
+      <strong>Einmalpasswort</strong> aus deiner Einladungs-E-Mail (<%= inviteEmail %>).</p>
+
+      <% if (typeof error !== 'undefined' && error) { %>
+        <div class="alert alert-error"><%= error %></div>
+      <% } %>
+
+      <form method="post" action="/onboard/otp" class="login-form">
+        <div class="form-group">
+          <label for="otp">Einmalpasswort</label>
+          <input type="text" id="otp" name="otp" required inputmode="numeric" pattern="[0-9]{6}" maxlength="6" placeholder="123456" style="text-align:center;font-size:1.4rem;letter-spacing:6px;">
+        </div>
+        <button type="submit" class="btn btn-primary btn-lg" style="width:100%;">Bestätigen</button>
+      </form>
+    </div>
+  </div>
+
+<%- include('partials/footer') %>

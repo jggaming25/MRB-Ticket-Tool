@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <title>Weiterleitung...</title>
+</head>
+<body style="background:#0f1117;color:#e6e8ef;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;">
+  <p>Anmeldung erfolgreich – du wirst weitergeleitet...</p>
+  <script>
+    try {
+      if (window.opener && window.opener !== window) {
+        window.opener.location.href = '<%= redirectTo %>';
+        window.close();
+      } else {
+        window.location.href = '<%= redirectTo %>';
+      }
+    } catch (e) {
+      window.location.href = '<%= redirectTo %>';
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,71 @@
+# Render-Blueprint fuer das TicketSystem MRB.
+# Beim ersten Deploy fragt Render nach allen Variablen mit "sync: false".
+# Weitere Infos: https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: ticketsystem-mrb
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+      # WICHTIG: Nach dem Deploy die echte URL eintragen:
+      # https://ticketsystem-mrb.onrender.com
+      - key: BASE_URL
+        value: https://ticketsystem-mrb.onrender.com
+      - key: PORT
+        value: "3000"
+      # Turso (Cloud-Datenbank) – Werte aus turso.tech holen
+      - key: TURSO_URL
+        sync: false
+      - key: TURSO_AUTH_TOKEN
+        sync: false
+      - key: SESSION_SECRET
+        generateValue: true
+      # Discord (https://discord.com/developers/applications)
+      - key: DISCORD_CLIENT_ID
+        sync: false
+      - key: DISCORD_CLIENT_SECRET
+        sync: false
+      # Muss exakt zur Redirect-URL in Discord passen:
+      # https://ticketsystem-mrb.onrender.com/auth/callback
+      - key: DISCORD_REDIRECT_URI
+        value: https://ticketsystem-mrb.onrender.com/auth/callback
+      - key: DISCORD_GUILD_ID
+        sync: false
+      - key: DISCORD_INVITE_URL
+        sync: false
+      # Kommagetrennte Discord-Usernames der HR-HR (Root) – z. B. jlg09
+      - key: AUTHORIZED_DISCORD_USERNAMES
+        sync: false
+      # E-Mail (optional; ohne SMTP landen Mails nur im Log)
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        sync: false
+      - key: SMTP_SECURE
+        sync: false
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: MAIL_FROM
+        sync: false
+
+  # Haelt den kostenlosen Web-Service wach: Render-Instanzen schlafen nach
+  # 15 Minuten ohne Anfragen ein. Dieser Cron fragt alle 10 Minuten /healthz ab.
+  - type: cron
+    name: keep-awake
+    runtime: node
+    plan: free
+    schedule: "*/10 * * * *"
+    buildCommand: echo "Kein Build noetig"
+    startCommand: >-
+      node -e "fetch(process.env.BASE_URL + '/healthz').then(r => { console.log('health ' + r.status); process.exit(r.ok ? 0 : 1); }).catch(e => { console.error(e); process.exit(1); });"
+    envVars:
+      - key: BASE_URL
+        value: https://ticketsystem-mrb.onrender.com
