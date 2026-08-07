@@ -44,17 +44,30 @@ function codeBox(code) {
   return `<div style="margin:16px 0;background:#0f1117;border:1px solid #5865f2;border-radius:8px;padding:14px;font-size:26px;font-weight:800;letter-spacing:4px;text-align:center;color:#fff;">${escapeHtml(code)}</div>`;
 }
 
-async function sendMail({ to, subject, html }) {
-  if (!to) return false;
-  if (transporter) {
-    await transporter.sendMail({ from: MAIL_FROM, to, subject, html });
-    return true;
-  }
-  // Fallback: Mail in mail-log/ schreiben (kein SMTP konfiguriert)
+function writeMailLog(to, subject, html) {
   const dir = path.join(__dirname, 'mail-log');
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, `${Date.now()}-${String(to).replace(/[^a-z0-9@._-]/gi, '_')}.html`);
   fs.writeFileSync(file, `Subject: ${subject}\nTo: ${to}\n\n${html}`);
+}
+
+async function sendMail({ to, subject, html }) {
+  if (!to) return false;
+  if (transporter) {
+    try {
+      await transporter.sendMail({ from: MAIL_FROM, to, subject, html });
+      return true;
+    } catch (err) {
+      // Bei SMTP-Fehlern (falsche Zugangsdaten, unverifizierter Absender o. a.)
+      // die Mail trotzdem lokal sichern und den Fehler sichtbar loggen, damit
+      // das Problem auf Render im Log auftaucht statt still zu scheitern.
+      writeMailLog(to, subject, html);
+      console.error(`[MAIL] SMTP-Fehler an ${to} (${subject}):`, err.message);
+      return false;
+    }
+  }
+  // Fallback: Mail in mail-log/ schreiben (kein SMTP konfiguriert)
+  writeMailLog(to, subject, html);
   console.log(`[MAIL] (SMTP nicht konfiguriert -> mail-log/) An: ${to} | Betreff: ${subject}`);
   return true;
 }
