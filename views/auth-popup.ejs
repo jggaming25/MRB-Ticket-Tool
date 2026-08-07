@@ -2,10 +2,18 @@
 <html lang="de">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Weiterleitung...</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="icon" href="/static/logo.png">
 </head>
-<body style="background:#0f1117;color:#e6e8ef;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;">
-  <p>Anmeldung erfolgreich – du wirst weitergeleitet...</p>
+<body class="popup-body">
+  <div class="popup-card">
+    <img class="popup-logo" src="/static/logo.png" alt="Logo">
+    <div class="popup-spinner" aria-hidden="true"></div>
+    <p class="popup-title">Anmeldung erfolgreich</p>
+    <p class="popup-sub">Du wirst weitergeleitet...</p>
+  </div>
   <script>
     try {
       if (window.opener && window.opener !== window) {
