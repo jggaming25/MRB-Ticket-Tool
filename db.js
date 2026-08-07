@@ -9,7 +9,10 @@ const path = require('node:path');
 // Umgebungsvariable, wird die synchrone libsql-Verbindung zu Turso verwendet.
 // Das ist fuer Render/Deploys gedacht, damit keine Daten verloren gehen.
 // ---------------------------------------------------------------------------
-const isRemote = !!(process.env.TURSO_URL);
+// Im Testmodus (NODE_ENV='test') nie Remote nutzen – auch wenn TURSO_URL
+// in der .env steht. Sonst wuerde ein Test die Produktionsdatenbank
+// veraendern/verschmutzen.
+const isRemote = process.env.NODE_ENV !== 'test' && !!(process.env.TURSO_URL);
 
 let db;
 

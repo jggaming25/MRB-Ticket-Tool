@@ -27,7 +27,7 @@
       <% } %>
       <% if (canClose) { %>
         <form method="post" action="/tickets/<%= ticket.id %>/close" class="inline-form"
-              onsubmit="return confirm('Ticket wirklich schließen? Nur HR-HR kann das rückgängig machen.');">
+              onsubmit="return confirm('Ticket wirklich schließen? Nur Inhaber kann das rückgängig machen.');">
           <button type="submit" class="btn btn-danger">Ticket schließen</button>
         </form>
       <% } %>
@@ -44,7 +44,7 @@
     <div class="panel panel-collapsible hidden" id="releasePanel">
       <div class="card">
         <h3>Freigabe zur Schließung beantragen</h3>
-        <p class="hint">Beschreibe, was du zur Lösung des Tickets erledigt hast. Danach entscheidet HR-HR über das Schließen.</p>
+        <p class="hint">Beschreibe, was du zur Lösung des Tickets erledigt hast. Danach entscheidet der Inhaber über das Schließen.</p>
         <form method="post" action="/admin/tickets/<%= ticket.id %>/release">
           <div class="form-group">
             <label for="release-report">Abschlussbericht</label>
@@ -94,7 +94,7 @@
                 <div class="msg-head">
                   <span class="msg-author">
                     <%= m.global_name || m.username %>
-                    <% if (m.role === 'hrhr') { %><span class="badge badge-hrhr">HR-HR</span><% } else if (m.role === 'hr') { %><span class="badge badge-hr">HR</span><% } %>
+                    <% if (m.role === 'hrhr') { %><span class="badge badge-hrhr">Inhaber</span><% } else if (m.role === 'hr') { %><span class="badge badge-hr">Team</span><% } %>
                     <% if (m.author_role === 'user' && m.user_id === user.id) { %><span class="badge">Du</span><% } %>
                   </span>
                   <span class="muted small"><%= fmtDate(m.created_at) %></span>
@@ -123,11 +123,11 @@
 
       <% if (ticket.status === 'closed') { %>
         <div class="alert">
-          Dieses Ticket ist geschlossen. Es wurde von HR-HR abgeschlossen.
+          Dieses Ticket ist geschlossen. Es wurde vom Inhaber abgeschlossen.
         </div>
       <% } else if (ticket.status === 'release') { %>
         <div class="alert alert-info">
-          Dieses Ticket ist zur <strong>Freigabe zur Schließung</strong> vorgelegt und wird von HR-HR geprüft. Es kann weiterhin geantwortet werden.
+          Dieses Ticket ist zur <strong>Freigabe zur Schließung</strong> vorgelegt und wird vom Inhaber geprüft. Es kann weiterhin geantwortet werden.
         </div>
       <% } else if (canEdit) { %>
         <div class="card reply-card">
@@ -203,7 +203,7 @@
                 <select class="input" id="transfer-assignee" name="assignee" required>
                   <option value="">– wählen –</option>
                   <% staffUsers.forEach((s) => { %>
-                    <option value="<%= s.id %>"><%= s.global_name || s.username %><%= s.role === 'hrhr' ? ' (HR-HR)' : ' (HR)' %></option>
+                    <option value="<%= s.id %>"><%= s.global_name || s.username %><%= s.role === 'hrhr' ? ' (Inhaber)' : ' (Team)' %></option>
                   <% }) %>
                 </select>
               </div>

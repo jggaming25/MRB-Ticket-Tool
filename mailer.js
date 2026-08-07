@@ -62,7 +62,7 @@ async function sendMail({ to, subject, html }) {
 async function sendInvite(to, inviteUrl, otp) {
   const body = `
     <p>Hallo!</p>
-    <p>Du wurdest als <strong>HR-Mitarbeiter</strong> für das TicketSystem MRB eingeladen.</p>
+    <p>Du wurdest als <strong>Teammitglied</strong> für das TicketSystem MRB eingeladen.</p>
     <p>Klicke auf den Link und melde dich anschließend mit deinem <strong>Discord-Konto</strong> an
     (ein Popup-Fenster öffnet sich), um die Einladung anzunehmen:</p>
     <p style="text-align:center;margin:20px 0;">
@@ -86,27 +86,27 @@ async function sendVerificationCode(to, code) {
 async function sendAccountDisabled(to, reason) {
   const body = `
     <p>Hallo!</p>
-    <p>Dein HR-Konto im TicketSystem MRB wurde <strong>deaktiviert</strong>.</p>
+    <p>Dein Teammitglied-Konto im TicketSystem MRB wurde <strong>deaktiviert</strong>.</p>
     ${reason ? `<p>Begründung:<br><em style="background:#0f1117;padding:10px;border-radius:6px;display:block;">${escapeHtml(reason)}</em></p>` : ''}
-    <p>Du kannst dich vorerst nicht mehr anmelden. Bei Fragen wende dich an den HR-HR-Verantwortlichen.</p>`;
-  return sendMail({ to, subject: '🎫 Dein HR-Konto wurde deaktiviert', html: layout('Konto deaktiviert', body) });
+    <p>Du kannst dich vorerst nicht mehr anmelden. Bei Fragen wende dich an den Inhaber.</p>`;
+  return sendMail({ to, subject: '🎫 Dein Teammitglied-Konto wurde deaktiviert', html: layout('Konto deaktiviert', body) });
 }
 
 async function sendAccountReactivated(to, reason) {
   const body = `
     <p>Hallo!</p>
-    <p>Dein HR-Konto im TicketSystem MRB wurde <strong>reaktiviert</strong> und du kannst dich wieder anmelden.</p>
+    <p>Dein Teammitglied-Konto im TicketSystem MRB wurde <strong>reaktiviert</strong> und du kannst dich wieder anmelden.</p>
     ${reason ? `<p>Begründung:<br><em style="background:#0f1117;padding:10px;border-radius:6px;display:block;">${escapeHtml(reason)}</em></p>` : ''}`;
-  return sendMail({ to, subject: '🎫 Dein HR-Konto wurde reaktiviert', html: layout('Konto reaktiviert', body) });
+  return sendMail({ to, subject: '🎫 Dein Teammitglied-Konto wurde reaktiviert', html: layout('Konto reaktiviert', body) });
 }
 
 async function sendAccountDeleted(to, reason) {
   const body = `
     <p>Hallo!</p>
-    <p>Dein HR-Konto im TicketSystem MRB wurde <strong>gelöscht</strong>.</p>
+    <p>Dein Teammitglied-Konto im TicketSystem MRB wurde <strong>gelöscht</strong>.</p>
     ${reason ? `<p>Begründung:<br><em style="background:#0f1117;padding:10px;border-radius:6px;display:block;">${escapeHtml(reason)}</em></p>` : ''}
-    <p>Bei Fragen wende dich an den HR-HR-Verantwortlichen.</p>`;
-  return sendMail({ to, subject: '🎫 Dein HR-Konto wurde gelöscht', html: layout('Konto gelöscht', body) });
+    <p>Bei Fragen wende dich an den Inhaber.</p>`;
+  return sendMail({ to, subject: '🎫 Dein Teammitglied-Konto wurde gelöscht', html: layout('Konto gelöscht', body) });
 }
 
 // ---- Kunden-Benachrichtigungen -------------------------------------------

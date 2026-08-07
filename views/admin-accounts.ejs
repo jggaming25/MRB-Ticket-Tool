@@ -2,8 +2,8 @@
 
   <div class="page-head">
     <div>
-      <h1>HR-Verwaltung</h1>
-      <p class="muted">Nur für festgelegte HR-HR (aus der Konfiguration). HR-Accounts einladen, verwalten und den aktuellen Stand aller Konten sehen.</p>
+      <h1>Team-Verwaltung</h1>
+      <p class="muted">Nur für festgelegte Inhaber (aus der Konfiguration). Team-Accounts einladen, verwalten und den aktuellen Stand aller Konten sehen.</p>
     </div>
     <div class="btn-group">
       <a class="btn btn-ghost" href="/admin/logs">Audit-Log</a>
@@ -14,11 +14,11 @@
   <div class="stat-grid">
     <div class="stat-card">
       <span class="stat-value"><%= stats.total %></span>
-      <span class="stat-label">HR / HR-HR Accounts</span>
+      <span class="stat-label">Team / Inhaber Accounts</span>
     </div>
     <div class="stat-card">
       <span class="stat-value"><%= stats.hr %></span>
-      <span class="stat-label">HR aktiv</span>
+      <span class="stat-label">Team aktiv</span>
     </div>
     <div class="stat-card">
       <span class="stat-value"><%= stats.invited %></span>
@@ -31,7 +31,7 @@
   </div>
 
   <div class="card">
-    <h2>HR-Account einladen</h2>
+    <h2>Team-Account einladen</h2>
     <p class="muted">Der Eingeladene erhält eine E-Mail mit Einladungslink und Einmalpasswort. Nach dem Discord-Login
     und dem Einmalpasswort legt er sein eigenes Passwort fest.</p>
     <form method="post" action="/admin/accounts/invite" class="filter-form">
@@ -55,7 +55,7 @@
         <label for="filter">Status</label>
         <select name="filter" id="filter">
           <option value="all" <%= filter === 'all' ? 'selected' : '' %>>Alle</option>
-          <option value="hr" <%= filter === 'hr' ? 'selected' : '' %>>Nur HR</option>
+          <option value="hr" <%= filter === 'hr' ? 'selected' : '' %>>Nur Team</option>
           <option value="invited" <%= filter === 'invited' ? 'selected' : '' %>>Eingeladen</option>
           <option value="disabled" <%= filter === 'disabled' ? 'selected' : '' %>>Deaktiviert</option>
           <option value="deleted" <%= filter === 'deleted' ? 'selected' : '' %>>Gelöscht</option>
@@ -117,11 +117,11 @@
                         <form method="post" action="/admin/accounts/<%= u.id %>/role">
                           <label class="small">Rolle ändern</label>
                           <select name="role" class="input">
-                            <option value="hr" <%= u.role === 'hr' ? 'selected' : '' %>>HR</option>
-                            <option value="hrhr" <%= u.role === 'hrhr' ? 'selected' : '' %>>HR-HR</option>
+                            <option value="hr" <%= u.role === 'hr' ? 'selected' : '' %>>Team</option>
+                            <option value="hrhr" <%= u.role === 'hrhr' ? 'selected' : '' %>>Inhaber</option>
                           </select>
                           <button type="submit" class="btn btn-sm btn-primary">Rolle setzen</button>
-                          <p class="hint">HR-HR nur möglich, wenn der Nutzer in <code>.env</code> als AUTHORIZED_DISCORD_USERNAMES festgelegt ist.</p>
+                          <p class="hint">Inhaber nur möglich, wenn der Nutzer in <code>.env</code> als AUTHORIZED_DISCORD_USERNAMES festgelegt ist.</p>
                         </form>
                       <% } %>
                       <% if (u.email) { %>

@@ -3,7 +3,7 @@
 const { db } = require('./db');
 const config = require('./config');
 
-const ROLE_LABELS = { user: 'Nutzer', hr: 'HR', hrhr: 'HR-HR' };
+const ROLE_LABELS = { user: 'Nutzer', hr: 'Team', hrhr: 'Inhaber' };
 const STATUS_LABELS = {
   active: 'Aktiv',
   invited: 'Eingeladen',
@@ -78,7 +78,7 @@ function requireHR(req, res, next) {
   if (!isHR(req.user)) {
     return res.status(403).render('error', {
       title: 'Kein Zugriff',
-      message: 'Du hast keine Berechtigung fuer diese Seite. Nur HR-Mitarbeiter duerfen Tickets bearbeiten.',
+      message: 'Du hast keine Berechtigung fuer diese Seite. Nur Team-Mitarbeiter duerfen Tickets bearbeiten.',
       code: 403,
     });
   }
@@ -90,7 +90,7 @@ function requireHRHR(req, res, next) {
   if (!isHRHR(req.user)) {
     return res.status(403).render('error', {
       title: 'Kein Zugriff',
-      message: 'Nur HR-HR-Accounts duerfen die HR-Verwaltung nutzen.',
+      message: 'Nur Inhaber duerfen die Team-Verwaltung nutzen.',
       code: 403,
     });
   }
@@ -104,7 +104,7 @@ function requireRoot(req, res, next) {
   if (!isRoot(req.user)) {
     return res.status(403).render('error', {
       title: 'Kein Zugriff',
-      message: 'Diese Seite ist nur fuer festgelegte HR-HR-Accounts (aus der Konfiguration) freigegeben.',
+      message: 'Diese Seite ist nur fuer festgelegte Inhaber-Accounts (aus der Konfiguration) freigegeben.',
       code: 403,
     });
   }

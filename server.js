@@ -457,7 +457,7 @@ app.get('/auth/callback', authLimiter, async (req, res) => {
         `).run(dUser.id, dUser.username, dUser.global_name || dUser.username, dUser.global_name || null,
           dUser.avatar || null, discordEmail);
         user = db.prepare('SELECT * FROM users WHERE id = ?').get(info.lastInsertRowid);
-        logAccountAction(user.id, user.id, 'hrhr_created', 'HR-HR-Account per Discord-Registrierung angelegt');
+        logAccountAction(user.id, user.id, 'hrhr_created', 'Inhaber-Account per Discord-Registrierung angelegt');
       } else {
         // Normaler Nutzer (Kunde) – E-Mail aus Discord übernehmen, damit wir ihn
         // per E-Mail benachrichtigen koennen, sobald er ein Ticket erstellt.
@@ -1053,7 +1053,7 @@ app.post('/tickets/:id/close', requireHRHR, loadTicketFor, async (req, res) => {
     UPDATE tickets SET status = 'closed', closed_at = ?, closed_by = ?, due_at = NULL, updated_at = ? WHERE id = ?
   `).run(now, req.user.id, now, ticket.id);
 
-  logTicketAction(ticket.id, req.user.id, 'closed', 'Ticket von HR-HR geschlossen');
+  logTicketAction(ticket.id, req.user.id, 'closed', 'Ticket vom Inhaber geschlossen');
   insertSystemMessage(ticket.id, 'Das Ticket wurde geschlossen.');
   await notifyCustomer(ticket, ticket.subject, 'Dein Ticket wurde erfolgreich abgeschlossen.');
   flash(req, 'success', 'Ticket geschlossen.');
@@ -1253,7 +1253,7 @@ app.post('/admin/tickets/:id/transfer', requireHR, loadTicketFor, async (req, re
   }
   // Nur aktueller Bearbeiter oder HR-HR kann übergeben
   if (ticket.claimed_by && ticket.claimed_by !== req.user.id && !isHRHR(req.user)) {
-    flash(req, 'error', 'Nur der aktuelle Bearbeiter (oder HR-HR) kann das Ticket übergeben.');
+    flash(req, 'error', 'Nur der aktuelle Bearbeiter (oder der Inhaber) kann das Ticket übergeben.');
     return res.redirect(`/tickets/${ticket.id}`);
   }
 
@@ -1323,7 +1323,7 @@ app.post('/admin/tickets/:id/release', requireHR, loadTicketFor, async (req, res
   logTicketAction(ticket.id, req.user.id, 'release_requested', `Freigabe zur Schliessung beantragt (Abschlussbericht eingereicht)`);
 
   await notifyCustomer(ticket, ticket.subject, 'Dein Ticket ist bearbeitet und wartet auf die endgültige Freigabe.');
-  flash(req, 'success', 'Ticket zur Freigabe vorgelegt. HR-HR entscheidet über das Schließen.');
+  flash(req, 'success', 'Ticket zur Freigabe vorgelegt. Der Inhaber entscheidet über das Schließen.');
   res.redirect(`/tickets/${ticket.id}`);
 });
 
@@ -1412,7 +1412,7 @@ app.get('/admin/accounts', requireRoot, (req, res) => {
   };
 
   res.render('admin-accounts', {
-    title: 'HR-Verwaltung',
+    title: 'Team-Verwaltung',
     users,
     logs,
     stats,
@@ -1491,7 +1491,7 @@ app.post('/admin/accounts/invite', requireRoot, async (req, res) => {
   `).run(discordUsername, discordUsername, email, otpHash, expires, inviteToken);
 
   await mailer.sendInvite(email, `${BASE_URL}/invite/${inviteToken}`, otp);
-  logAccountAction(info.lastInsertRowid, req.user.id, 'invited', `Eingeladen als HR (${discordUsername}, ${email})`);
+  logAccountAction(info.lastInsertRowid, req.user.id, 'invited', `Eingeladen als Team (${discordUsername}, ${email})`);
 
   flash(req, 'success', `Einladung an ${email} gesendet (inkl. Einmalpasswort).`);
   res.redirect('/admin/accounts');
@@ -1499,7 +1499,7 @@ app.post('/admin/accounts/invite', requireRoot, async (req, res) => {
 
 app.post('/admin/accounts/:id/disable', requireRoot, (req, res) => {
   const target = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
-  if (!target || target.role === 'hrhr') return renderError(res, 400, 'Nicht moeglich', 'HR-HR-Accounts koennen nicht deaktiviert werden.');
+  if (!target || target.role === 'hrhr') return renderError(res, 400, 'Nicht moeglich', 'Inhaber-Accounts koennen nicht deaktiviert werden.');
 
   const reason = String(req.body.reason || '').trim();
   if (!reason) {
@@ -1595,7 +1595,7 @@ app.post('/admin/accounts/:id/role', requireRoot, async (req, res) => {
       global_name: target.global_name,
     });
     if (!authorized) {
-      flash(req, 'error', `"${target.username}" ist nicht in der Config als HR-HR festgelegt und kann nicht zum HR-HR befördert werden.`);
+      flash(req, 'error', `"${target.username}" ist nicht in der Config als Inhaber festgelegt und kann nicht zum Inhaber befördert werden.`);
       return res.redirect('/admin/accounts');
     }
   }
@@ -1609,7 +1609,7 @@ app.post('/admin/accounts/:id/role', requireRoot, async (req, res) => {
     .run(role, role, target.id);
   logAccountAction(target.id, req.user.id, 'role_changed', `Rolle: ${oldRole} → ${role}`);
 
-  flash(req, 'success', `Rolle von ${target.username} auf "${role === 'hrhr' ? 'HR-HR' : 'HR'}" geändert.`);
+  flash(req, 'success', `Rolle von ${target.username} auf "${role === 'hrhr' ? 'Inhaber' : 'Team'}" geändert.`);
   res.redirect('/admin/accounts');
 });
 

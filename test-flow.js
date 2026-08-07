@@ -18,6 +18,10 @@ process.env.DISCORD_CLIENT_ID = 'test-client-id';
 process.env.DISCORD_CLIENT_SECRET = 'test-client-secret';
 process.env.DB_DIR = path.join(__dirname, 'data-test');
 process.env.BASE_URL = 'http://localhost:3000';
+// WICHTIG: Remote-DB (Turso) fuer den Test deaktivieren – sonst wuerde der
+// Test in die Produktionsdatenbank schreiben, statt in die lokale data-test/.
+delete process.env.TURSO_URL;
+delete process.env.TURSO_AUTH_TOKEN;
 // Guild-Prüfung bleibt hier aus (DISCORD_GUILD_ID nicht gesetzt),
 // damit der komplette Flow ohne echten Server durchlaeuft.
 
@@ -180,7 +184,7 @@ function findMail(subjectPart) {
   ok('HR-HR: is_root gesetzt (festegelegter HR-HR)', hrhrUser.is_root === 1);
 
   r = await get('/admin/accounts', hrhrCookie);
-  ok('HR-HR: HR-Verwaltung erreichbar', r.status === 200 && r.body.includes('HR-Verwaltung'));
+  ok('HR-HR: Team-Verwaltung erreichbar', r.status === 200 && r.body.includes('Team-Verwaltung'));
 
   // ==================================================================
   // 2) Passwort-Login des HR-HR
