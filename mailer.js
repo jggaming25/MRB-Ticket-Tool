@@ -225,20 +225,29 @@ async function sendPasswordReset(to, resetUrl) {
 
 // Einmaliger SMTP-Selbsttest beim Serverstart: Prüft, ob die SMTP-Verbindung
 // zu Brevo überhaupt aufgebaut werden kann und loggt das Ergebnis sichtbar.
+// Zeigt bei Fehlern den konkreten Grund (DNS, ECONNREFUSED, ETIMEDOUT, TLS, Auth).
 async function testConnection() {
   if (!transporter) {
     console.warn('[MAIL] SMTP-Selbsttest: kein SMTP konfiguriert (Mails landen im mail-log/)');
     return;
   }
+  const details = { host: process.env.SMTP_HOST, port: process.env.SMTP_PORT, user: process.env.SMTP_USER };
   try {
-    const ok = await withSendTimeout(transporter.verify());
-    if (ok) {
-      console.log(`[MAIL] SMTP-Selbsttest OK: ${process.env.SMTP_HOST}:${process.env.SMTP_PORT} (User ${process.env.SMTP_USER}) erreichbar`);
+    // Sicherheitsnetz, damit der Start nicht hängen bleibt, falls der Server
+    // gar nicht antwortet. Der echte Fehler kommt trotzdem in den catch-Zweig.
+    const result = await Promise.race([
+      transporter.verify().then(() => 'ok'),
+      new Promise((resolve) => setTimeout(() => resolve('timeout'), 30000)),
+    ]);
+    if (result === 'ok') {
+      console.log(`[MAIL] SMTP-Selbsttest OK: ${details.host}:${details.port} (User ${details.user}) erreichbar`);
     } else {
-      console.error(`[MAIL] SMTP-Selbsttest FEHLGESCHLAGEN: Verbindung zu ${process.env.SMTP_HOST}:${process.env.SMTP_PORT} hat die Zeitueberschreitung erreicht`);
+      console.error(`[MAIL] SMTP-Selbsttest FEHLGESCHLAGEN: Verbindung zu ${details.host}:${details.port} hat die Zeitueberschreitung erreicht (30s) – kein Antwort vom Server`);
     }
   } catch (err) {
-    console.error(`[MAIL] SMTP-Selbsttest FEHLGESCHLAGEN: ${err.message}`);
+    const code = err && err.code ? ` (${err.code})` : '';
+    const cmd = err && err.command ? ` Kommando=${err.command}` : '';
+    console.error(`[MAIL] SMTP-Selbsttest FEHLGESCHLAGEN: ${err.message}${code}${cmd}`);
   }
 }
 
