@@ -583,13 +583,12 @@ app.post('/onboard/setup', requireLogin, async (req, res) => {
     WHERE id = ?
   `).run(email, passwordHash, codeHash, req.user.id);
 
-  await mailer.sendVerificationCode(email, code);
-  db.prepare(`
-    UPDATE users
-    SET last_mail_sent_at = datetime('now'), updated_at = datetime('now')
-    WHERE id = ?
-  `).run(req.user.id);
-  flash(req, 'success', 'Ein Verifizierungscode wurde an deine E-Mail-Adresse gesendet.');
+  const mailOk = await sendVerifyCode(req.user.id, email);
+  if (!mailOk) {
+    flash(req, 'error', 'Die E-Mail mit dem Verifizierungscode konnte nicht versendet werden. Bitte versuche es nach dem Weiterleiten erneut.');
+  } else {
+    flash(req, 'success', 'Ein Verifizierungscode wurde an deine E-Mail-Adresse gesendet.');
+  }
   res.redirect('/onboard/verify');
 });
 
@@ -600,8 +599,14 @@ app.get('/onboard/verify', requireLogin, async (req, res) => {
 
   const needsSend = !req.user.last_mail_sent_at;
   let sendError = false;
+  let debugStatus = '';
   if (needsSend) {
     sendError = !(await sendVerifyCode(req.user.id, req.user.pending_email));
+    debugStatus = sendError
+      ? `Autoversand um ${new Date().toLocaleTimeString('de-DE')} an ${req.user.pending_email} FEHLGESCHLAGEN (siehe Server-Log)`
+      : `Autoversand um ${new Date().toLocaleTimeString('de-DE')} an ${req.user.pending_email} ausgefuehrt`;
+  } else {
+    debugStatus = `Code wurde zuletzt am ${req.user.last_mail_sent_at} gesendet (an ${req.user.pending_email})`;
   }
 
   const user = db.prepare('SELECT last_mail_sent_at FROM users WHERE id = ?').get(req.user.id);
@@ -609,6 +614,7 @@ app.get('/onboard/verify', requireLogin, async (req, res) => {
     title: 'E-Mail verifizieren',
     sentAt: user.last_mail_sent_at || null,
     error: sendError ? 'Der Code konnte gerade nicht versendet werden. Bitte versuche es in einer Minute erneut.' : null,
+    debugStatus,
   });
 });
 
@@ -633,6 +639,7 @@ app.post('/onboard/verify/resend', requireLogin, async (req, res) => {
       title: 'E-Mail verifizieren',
       sentAt: req.user.last_mail_sent_at || null,
       error: 'Der Code konnte gerade nicht versendet werden. Bitte versuche es in einer Minute erneut.',
+      debugStatus: `Resend um ${new Date().toLocaleTimeString('de-DE')} an ${req.user.pending_email} FEHLGESCHLAGEN (siehe Server-Log)`,
     });
   }
   flash(req, 'success', 'Ein neuer Verifizierungscode wurde gesendet.');

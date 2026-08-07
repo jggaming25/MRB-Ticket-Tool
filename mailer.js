@@ -91,7 +91,7 @@ async function sendMail({ to, subject, html }) {
   if (!to) return false;
   if (transporter) {
     try {
-      console.log(`[MAIL] Versand gestartet an ${to} (${subject})`);
+      console.log(`[MAIL] Versand gestartet an ${to} (${subject}) via ${process.env.SMTP_HOST}:${process.env.SMTP_PORT} als ${process.env.SMTP_USER}, From=${MAIL_FROM}`);
       const ok = await withSendTimeout(
         transporter.sendMail({ from: MAIL_FROM, to, subject, html })
       );

@@ -11,6 +11,12 @@
         <div class="alert alert-error"><%= error %></div>
       <% } %>
 
+      <% if (typeof debugStatus !== 'undefined' && debugStatus) { %>
+        <div class="alert" style="background:#17203a;border:1px solid #2e3443;font-size:0.85rem;">
+          <strong>Debug:</strong> <%= debugStatus %>
+        </div>
+      <% } %>
+
       <form method="post" action="/onboard/verify" class="login-form">
         <div class="form-group">
           <label for="code">Verifizierungscode</label>
