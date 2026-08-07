@@ -26,6 +26,20 @@ delete process.env.TURSO_AUTH_TOKEN;
 // damit der komplette Flow ohne echten Server durchlaeuft.
 
 const MAIL_DIR = path.join(__dirname, 'mail-log');
+
+// Alte Test-Reste entfernen (Mails + lokale Test-DB), damit jeder Lauf
+// reproduzierbar startet und keine veralteten Dateien den Test verfaelschen.
+try {
+  if (fs.existsSync(MAIL_DIR)) {
+    for (const f of fs.readdirSync(MAIL_DIR)) {
+      if (f.endsWith('.html')) fs.unlinkSync(path.join(MAIL_DIR, f));
+    }
+  }
+} catch {}
+try {
+  const testDb = path.join(__dirname, 'data-test', 'tickets.db');
+  if (fs.existsSync(testDb)) fs.unlinkSync(testDb);
+} catch {}
 let mockDiscord = { id: '1', username: 'test', global_name: 'Test', discriminator: '0' };
 
 // Discord-API mocken (globales fetch). Nur Discord-Aufrufe abfangen;

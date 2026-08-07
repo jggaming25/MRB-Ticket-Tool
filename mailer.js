@@ -17,6 +17,38 @@ if (process.env.SMTP_HOST && process.env.SMTP_USER) {
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASS || '',
     },
+    connectionTimeout: 15000,
+    greetingTimeout: 15000,
+    socketTimeout: 20000,
+  });
+}
+
+// Sicherheitsnetz: Sollte nodemailer den SMTP-Vorgang trotz Timeouts nicht
+// abschließen (z. B. weil der Server gar nicht antwortet), den Vorgang nach
+// 25 Sekunden abbrechen statt den Request ewig hängen zu lassen.
+const SEND_TIMEOUT_MS = 25000;
+function withSendTimeout(promise) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve(false);
+    }, SEND_TIMEOUT_MS);
+    promise.then(
+      (ok) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(ok);
+      },
+      () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(false);
+      }
+    );
   });
 }
 
@@ -55,8 +87,17 @@ async function sendMail({ to, subject, html }) {
   if (!to) return false;
   if (transporter) {
     try {
-      await transporter.sendMail({ from: MAIL_FROM, to, subject, html });
-      return true;
+      console.log(`[MAIL] Versand gestartet an ${to} (${subject})`);
+      const ok = await withSendTimeout(
+        transporter.sendMail({ from: MAIL_FROM, to, subject, html })
+      );
+      if (ok) {
+        console.log(`[MAIL] Versand OK an ${to} (${subject})`);
+      } else {
+        writeMailLog(to, subject, html);
+        console.error(`[MAIL] SMTP-Zeitüberschreitung an ${to} (${subject}) – Mail in mail-log/ gesichert`);
+      }
+      return ok;
     } catch (err) {
       // Bei SMTP-Fehlern (falsche Zugangsdaten, unverifizierter Absender o. a.)
       // die Mail trotzdem lokal sichern und den Fehler sichtbar loggen, damit
