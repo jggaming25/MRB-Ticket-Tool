@@ -9,18 +9,11 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // Discord-Login in einem Popup-Fenster
+  // Discord-Login: normale Navigation (kein Popup mehr)
   document.querySelectorAll('.discord-login').forEach((btn) => {
     btn.addEventListener('click', () => {
-      const redirect = btn.dataset.redirect || '/dashboard';
       setLoading(btn, true);
-      const w = window.open('/auth/discord', 'discordLogin', 'width=620,height=740,popup=yes');
-      const timer = setInterval(() => {
-        if (!w || w.closed) {
-          clearInterval(timer);
-          window.location.href = redirect;
-        }
-      }, 400);
+      window.location.href = '/auth/discord';
     });
   });
 

@@ -1,0 +1,47 @@
+<%- include('partials/head', { title, user, isHR, isHRHR, currentPath }) %>
+
+  <div class="legal">
+    <h1>Datenschutzerklärung</h1>
+
+    <h2>1. Verantwortliche Stelle</h2>
+    <p>Verantwortlich für die Verarbeitung personenbezogener Daten im Sinne der Datenschutz-Grundverordnung (DSGVO) ist der Betreiber dieser Website (siehe <a href="/impressum">Impressum</a>).</p>
+
+    <h2>2. Erhebung und Speicherung personenbezogener Daten</h2>
+    <p>Bei der Nutzung unseres Ticketsystems werden folgende Daten erhoben:</p>
+    <ul>
+      <li><strong>Discord-Konto:</strong> Discord-ID, Benutzername, Anzeigename und (falls vom Discord-Konto bereitgestellt) die verifizierte E-Mail-Adresse. Diese Daten werden benötigt, um die Anmeldung und die Zuordnung von Tickets zu ermöglichen.</li>
+      <li><strong>Kontodaten:</strong> E-Mail-Adresse und ein Passwort-Hash, wenn ein eigenes Passwort gesetzt wird.</li>
+      <li><strong>Ticketdaten:</strong> Betreff, Beschreibung, Priorität, Kategorie sowie alle im Ticketverlauf gesendeten Nachrichten und angehängten Dateien.</li>
+      <li><strong>Technische Daten:</strong> Sessions (in einem Cookie) sowie Logbuch-Einträge über sicherheitsrelevante Vorgänge (Anmeldung, Einladungen, Rechteänderungen).</li>
+    </ul>
+
+    <h2>3. Zweck der Verarbeitung</h2>
+    <p>Die Daten werden ausschließlich für den Betrieb des Ticketsystems verwendet: Anmeldung, Bearbeitung und Nachverfolgung von Tickets, Versand von Benachrichtigungs-E-Mails sowie Sicherheit (Schutz vor unbefugtem Zugriff und Missbrauch).</p>
+
+    <h2>4. Rechtsgrundlage</h2>
+    <p>Rechtsgrundlage ist Art. 6 Abs. 1 lit. b DSGVO (Vertragserfüllung / vorvertragliche Maßnahmen) sowie Art. 6 Abs. 1 lit. f DSGVO (berechtigtes Interesse an einem funktionierenden und sicheren Ticketsystem).</p>
+
+    <h2>5. Weitergabe an Dritte</h2>
+    <p>Eine Weitergabe an Dritte erfolgt nur, soweit dies für den Betrieb notwendig ist:</p>
+    <ul>
+      <li><strong>Hosting:</strong> Die Website wird auf Servern von Render (render.com) gehostet.</li>
+      <li><strong>Datenbank:</strong> Die Datenbank wird als cloudbasierte SQLite-Datenbank von Turso (turso.tech) betrieben.</li>
+      <li><strong>E-Mail-Versand:</strong> Benachrichtigungs-E-Mails werden über einen E-Mail-Dienstleister (SMTP) versendet.</li>
+      <li><strong>Discord:</strong> Die Anmeldung erfolgt über das OAuth2-Verfahren von Discord (discord.com).</li>
+    </ul>
+    <p>Diese Dienstleister können ihren Sitz außerhalb der EU haben. Die Übermittlung erfolgt auf Grundlage der EU-Standardvertragsklauseln, sofern ein Drittland betroffen ist.</p>
+
+    <h2>6. Speicherdauer</h2>
+    <p>Daten werden gelöscht, sobald sie für die genannten Zwecke nicht mehr erforderlich sind. Tickets und Nutzerkonten können gelöscht werden; gelöschte Konten werden als "Gelöscht" markiert. Logbuch-Einträge werden regelmäßig bereinigt.</p>
+
+    <h2>7. Deine Rechte</h2>
+    <p>Du hast das Recht auf Auskunft, Berichtigung, Löschung, Einschränkung der Verarbeitung, Datenübertragbarkeit und Widerspruch. Wende dich dazu an den Betreiber (siehe <a href="/impressum">Impressum</a>). Zudem hast du das Recht, eine Beschwerde bei einer Datenschutz-Aufsichtsbehörde einzulegen.</p>
+
+    <h2>8. Cookies</h2>
+    <p>Diese Website verwendet ausschließlich ein technisch notwendiges Session-Cookie, um deine Anmeldung aufrechtzuerhalten. Es werden keine Tracking-Cookies eingesetzt.</p>
+
+    <h2>9. Stand</h2>
+    <p>Diese Datenschutzerklärung wurde zuletzt im August 2026 aktualisiert.</p>
+  </div>
+
+<%- include('partials/footer') %>

@@ -36,7 +36,7 @@ body {
   flex-direction: column;
 }
 
-.container { max-width: 1100px; margin: 0 auto; padding: 0 20px; width: 100%; }
+.container { max-width: 1400px; margin: 0 auto; padding: 0 20px; width: 100%; }
 
 /* ---------- Topbar ---------- */
 .topbar {
@@ -47,16 +47,17 @@ body {
   top: 0;
   z-index: 50;
 }
-.topbar-inner { display: flex; align-items: center; justify-content: space-between; height: 60px; gap: 16px; }
-.brand { display: flex; align-items: center; gap: 8px; text-decoration: none; color: var(--text); font-size: 1.05rem; }
+.topbar-inner { display: flex; align-items: center; justify-content: space-between; min-height: 60px; gap: 16px; flex-wrap: wrap; }
+.brand { display: flex; align-items: center; gap: 8px; text-decoration: none; color: var(--text); font-size: 1.05rem; white-space: nowrap; }
 .brand-logo { font-size: 1.4rem; }
-.nav { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.nav { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
 .nav-link {
   color: var(--muted);
   text-decoration: none;
-  padding: 8px 12px;
+  padding: 8px 10px;
   border-radius: 8px;
-  font-size: 0.92rem;
+  font-size: 0.9rem;
+  white-space: nowrap;
   transition: color 0.15s, background 0.15s;
 }
 .nav-link:hover { color: var(--text); background: var(--card-2); }
@@ -447,6 +448,20 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
 /* ---------- Footer ---------- */
 .footer { border-top: 1px solid var(--border); padding: 18px 0; text-align: center; }
 .footer p { margin: 0; color: var(--muted); font-size: 0.85rem; }
+.footer-inner { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 16px; }
+.footer-text { margin: 0; color: var(--muted); font-size: 0.85rem; }
+.footer-links { display: flex; align-items: center; gap: 8px; }
+.footer-link { color: var(--muted); text-decoration: none; font-size: 0.85rem; transition: color 0.15s; }
+.footer-link:hover { color: var(--text); }
+.footer-link.active { color: var(--text); font-weight: 600; }
+.footer-sep { color: var(--border); }
+
+/* ---------- Rechtstexte (Impressum / Datenschutz) ---------- */
+.legal { max-width: 800px; margin: 0 auto; padding: 24px 0 8px; }
+.legal h1 { font-size: 1.5rem; margin-bottom: 4px; }
+.legal h2 { font-size: 1.05rem; margin-top: 26px; color: var(--text); }
+.legal p, .legal li { color: var(--muted); line-height: 1.6; }
+.legal strong { color: var(--text); }
 
 /* ---------- Logo ---------- */
 .brand-logo { width: 34px; height: 34px; border-radius: 9px; object-fit: contain; }

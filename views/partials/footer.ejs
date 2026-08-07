@@ -1,7 +1,12 @@
   </main>
   <footer class="footer">
-    <div class="container">
-      <p><%= brand %> · Support-Plattform für die Mitteldeutsche Regionalbahn</p>
+    <div class="container footer-inner">
+      <p class="footer-text"><%= brand %> · Support-Plattform für die Mitteldeutsche Regionalbahn</p>
+      <nav class="footer-links">
+        <a class="footer-link <%= currentPath === '/impressum' ? 'active' : '' %>" href="/impressum">Impressum</a>
+        <span class="footer-sep">·</span>
+        <a class="footer-link <%= currentPath === '/datenschutz' ? 'active' : '' %>" href="/datenschutz">Datenschutz</a>
+      </nav>
     </div>
   </footer>
   <script src="/static/js/main.js?v=<%= assetVersion %>"></script>

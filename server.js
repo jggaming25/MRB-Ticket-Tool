@@ -42,6 +42,10 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
 
+// Render läuft hinter einem Reverse-Proxy. Ohne "trust proxy" würde Express
+// die Proxy-IP statt der echten Client-IP sehen – der Rate-Limiter wäre nutzlos.
+app.set('trust proxy', 1);
+
 // Cache-Busting: Versionsnummer anhand der letzten Änderung der CSS-Datei.
 // Dadurch wird ein veraltetes Browser-Cache der style.css vermieden.
 let assetVersion = 1;
@@ -57,11 +61,41 @@ app.set('views', path.join(__dirname, 'views'));
 app.disable('x-powered-by');
 
 app.use(helmet({
-  contentSecurityPolicy: false, // CDN (Discord Avatare) muss erlaubt sein
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'"], // Carousel-Helfer (inline) + eigene JS
+      styleSrc: ["'self'", "'unsafe-inline'"],  // Inline-styles in EJS-Templates
+      imgSrc: ["'self'", 'data:', 'https://cdn.discordapp.com'],
+      connectSrc: ["'self'"],
+      fontSrc: ["'self'"],
+      objectSrc: ["'none'"],
+      frameAncestors: ["'none'"],
+      formAction: ["'self'"],
+      baseUri: ["'self'"],
+    },
+  },
+  referrerPolicy: { policy: 'no-referrer' },
+  crossOriginEmbedderPolicy: false,
 }));
 
-app.use(express.urlencoded({ extended: false }));
-app.use(express.json());
+// Strikte Begrenzung der Request-Groessen, damit grosse Payloads weder
+// Speicher noch Datenbank belasten. (Multipart-Uploads laufen ueber multer.)
+app.use(express.urlencoded({ extended: false, limit: '100kb' }));
+app.use(express.json({ limit: '100kb' }));
+
+// Globaler Rate-Limiter: schuetzt die gesamte Website (und damit auch den
+// Datenbank-Datastore) vor Anfrage-Fluten / einfachen DDoS-Angriffen.
+// Statische Dateien (CSS/JS/Bilder) und der Health-Check werden ausgenommen.
+const globalLimiter = rateLimit({
+  windowMs: 60 * 1000,          // 1 Minute
+  max: 300,                     // max. 300 Requests pro Minute und IP
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => req.path.startsWith('/static/') || req.path === '/healthz',
+  message: { error: 'Zu viele Anfragen. Bitte warte einen Moment und versuche es erneut.' },
+});
+app.use(globalLimiter);
 
 const sessionStore = new session.MemoryStore();
 
@@ -73,6 +107,7 @@ app.use(session({
   cookie: {
     httpOnly: true,
     sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production' || BASE_URL.startsWith('https://'),
     maxAge: 7 * 24 * 60 * 60 * 1000, // 7 Tage
   },
 }));
@@ -141,10 +176,6 @@ const upload = multer({
 // ---------------------------------------------------------------------------
 function renderError(res, code, title, message) {
   return res.status(code).render('error', { title, message, code });
-}
-
-function renderPopup(res, redirectTo = '/') {
-  res.render('auth-popup', { redirectTo });
 }
 
 function flash(req, type, text) {
@@ -266,16 +297,27 @@ function ticketsToCsv(tickets) {
 // ---------------------------------------------------------------------------
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 30,
+  max: 20,
   standardHeaders: true,
   legacyHeaders: false,
+  message: { error: 'Zu viele Anmeldeversuche. Bitte warte 15 Minuten.' },
 });
 
 const authLimiter = rateLimit({
   windowMs: 10 * 60 * 1000,
-  max: 100,
+  max: 60,
   standardHeaders: true,
   legacyHeaders: false,
+  message: { error: 'Zu viele Anfragen. Bitte warte einen Moment.' },
+});
+
+// Schuetzt den Datei-Download vor Massenabruf (Blob-Attacken auf die Datenbank).
+const fileDownloadLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => !req.user,
 });
 
 app.get('/login', (req, res) => {
@@ -446,7 +488,7 @@ app.get('/auth/callback', authLimiter, async (req, res) => {
     req.session.regenerate((err) => {
       if (err) throw err;
       req.session.userId = user.id;
-      renderPopup(res, '/dashboard');
+      res.redirect('/dashboard');
     });
   } catch (err) {
     console.error('OAuth-Fehler:', err.message);
@@ -649,6 +691,14 @@ app.get('/', (req, res) => {
     images: getHomeImages(),
     slideSeconds: config.home.slideSeconds,
   });
+});
+
+app.get('/impressum', (req, res) => {
+  res.render('impressum', { title: 'Impressum' });
+});
+
+app.get('/datenschutz', (req, res) => {
+  res.render('datenschutz', { title: 'Datenschutzerklärung' });
 });
 
 app.get('/dashboard', requireLogin, (req, res) => {
@@ -1025,7 +1075,7 @@ app.post('/tickets/:id/reopen', requireHRHR, loadTicketFor, async (req, res) => 
 });
 
 // Geschuetzter Datei-Download
-app.get('/file/:ticketId/:messageId/:filename', requireLogin, (req, res) => {
+app.get('/file/:ticketId/:messageId/:filename', requireLogin, fileDownloadLimiter, (req, res) => {
   const ticket = db.prepare('SELECT * FROM tickets WHERE id = ?').get(req.params.ticketId);
   if (!ticket) return res.status(404).end();
   const allowed = isHR(req.user) || ticket.user_id === req.user.id;
