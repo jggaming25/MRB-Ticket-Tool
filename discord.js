@@ -132,6 +132,16 @@ function matchesDiscordUsername(invitedUsername, dUser) {
   return candidates.includes(String(invitedUsername || '').toLowerCase());
 }
 
+// Gibt es eine offene Einladung, auf die der Discord-Nutzer passt?
+// Wird beim Login geprueft, damit Konten mit offener HR-Einladung eine
+// verifizierte E-Mail-Adresse benoetigen (die wird nicht mehr abgefragt).
+function matchesAnyPendingInvite(dUser) {
+  const rows = db.prepare(`
+    SELECT discord_username FROM users WHERE status = 'invited' AND discord_username IS NOT NULL
+  `).all();
+  return rows.some((u) => matchesDiscordUsername(u.discord_username, dUser));
+}
+
 // Nur verifizierte E-Mails aus dem Discord-Konto verwenden. E-Mail wird nur
 // mit dem Scope "identify email" uebergeben und nur dann gespeichert.
 function isEmailVerified(dUser) {
@@ -147,6 +157,7 @@ module.exports = {
   staffIds,
   isAuthorizedDiscord,
   matchesDiscordUsername,
+  matchesAnyPendingInvite,
   isEmailVerified,
   isGuildCheckEnabled,
   isInGuild,

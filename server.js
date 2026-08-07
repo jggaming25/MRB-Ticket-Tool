@@ -182,36 +182,12 @@ function flash(req, type, text) {
   req.session.flash = { type, text };
 }
 
-function genOtp() {
-  return String(crypto.randomInt(100000, 1000000));
-}
-
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-// Verifizierungscode erzeugen, speichern und per E-Mail versenden.
-// last_mail_sent_at wird NUR bei erfolgreichem Versand gesetzt, damit der
-// User bei einem SMTP-Fehler sofort erneut versuchen kann (kein 60s-Warten).
-async function sendVerifyCode(userId, email) {
-  const code = genOtp();
-  const codeHash = await bcrypt.hash(code, 10);
-  const ok = await mailer.sendVerificationCode(email, code);
-  if (ok) {
-    db.prepare(`
-      UPDATE users
-      SET verify_token = ?, last_mail_sent_at = datetime('now'), updated_at = datetime('now')
-      WHERE id = ?
-    `).run(codeHash, userId);
-  }
-  return ok;
-}
-
-async function sendOtpEmail(user) {
-  const otp = genOtp();
-  const otpHash = await bcrypt.hash(otp, 10);
-  const expires = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-  db.prepare('UPDATE users SET otp_hash = ?, otp_expires = ? WHERE id = ?').run(otpHash, expires, user.id);
-  await mailer.sendInvite(user.email, `${BASE_URL}/invite/${user.invite_token}`, otp);
-}
+// Verifizierung per E-Mail-Code wurde entfernt: Die E-Mail wird direkt aus dem
+// Discord-Konto uebernommen und ist nicht aenderbar. Es gibt keine Einmal-
+// passwoerter (OTP) mehr – nach dem Discord-Login wird nur noch ein Passwort
+// festgelegt.
 
 // ---------------------------------------------------------------------------
 // Kunden-/Mail-Helfer
@@ -431,6 +407,18 @@ app.get('/auth/callback', authLimiter, async (req, res) => {
       ? dUser.email.trim().toLowerCase()
       : null;
 
+    // Seit der Abschaffung der E-Mail-Verifizierung ist die Discord-E-Mail
+    // die einzige Quelle. HR-HR/HR-Konten brauchen zwingend eine verifizierte
+    // E-Mail, sonst wird der Login blockiert (Anweisung: hinterlege in Discord
+    // eine E-Mail-Adresse). Normale Kunden duerfen ohne E-Mail weiter.
+    const needsEmail = discord.isAuthorizedDiscord(dUser) || discord.matchesAnyPendingInvite(dUser);
+    if (needsEmail && !discordEmail) {
+      return renderError(res, 403, 'E-Mail-Adresse fehlt',
+        'Dein Discord-Konto hat keine verifizierte E-Mail-Adresse. Hinterlege und bestaetige '
+        + 'in Discord eine E-Mail-Adresse (Discord > Einstellungen > Mein Konto). Danach kannst '
+        + 'du dich hier anmelden.');
+    }
+
     // 1) Passende offene Einladung? (wichtigste Pruefung zuerst)
     const pendingInvites = db.prepare(`
       SELECT * FROM users WHERE status = 'invited' AND discord_username IS NOT NULL
@@ -453,11 +441,11 @@ app.get('/auth/callback', authLimiter, async (req, res) => {
         // Konto existiert bereits (normaler Nutzer) -> zur HR-Einladung erhoehen
         db.prepare(`
           UPDATE users
-          SET role = 'hr', status = 'invited', invite_token = ?, otp_hash = ?, otp_expires = ?,
+          SET role = 'hr', status = 'invited', invite_token = ?,
               discord_username = ?, username = ?, global_name = ?, avatar = ?,
               updated_at = datetime('now')
           WHERE id = ?
-        `).run(invite.invite_token, invite.otp_hash, invite.otp_expires, dUser.username,
+        `).run(invite.invite_token, dUser.username,
           dUser.global_name || dUser.username, dUser.global_name || null, dUser.avatar || null, user.id);
         db.prepare("UPDATE users SET status = 'deleted', disabled_reason = 'Durch bestehendes Konto ersetzt' WHERE id = ?").run(invite.id);
         user = db.prepare('SELECT * FROM users WHERE id = ?').get(user.id);
@@ -467,7 +455,7 @@ app.get('/auth/callback', authLimiter, async (req, res) => {
     // 2) Neues Konto
     if (!user) {
       if (discord.isAuthorizedDiscord(dUser)) {
-        // HR-HR: erstes Login -> Setup (Email + Passwort)
+        // HR-HR: erstes Login -> nur noch Passwort festlegen (E-Mail kommt aus Discord)
         const info = db.prepare(`
           INSERT INTO users (discord_id, discord_username, username, global_name, avatar, email, role, status, is_root, created_at, updated_at)
           VALUES (?, ?, ?, ?, ?, ?, 'hrhr', 'pending_setup', 1, datetime('now'), datetime('now'))
@@ -490,6 +478,16 @@ app.get('/auth/callback', authLimiter, async (req, res) => {
       if (user.status === 'disabled' || user.status === 'deleted') {
         return renderError(res, 403, 'Konto gesperrt',
           `Dein Konto ist deaktiviert.${user.disabled_reason ? ` Grund: ${user.disabled_reason}` : ''}`);
+      }
+      // Altbestand: Konten, die noch in der E-Mail-Verifizierung festhingen
+      // (pending_email), werden direkt aktiviert – die E-Mail steht bereits.
+      if (user.status === 'pending_email') {
+        db.prepare(`
+          UPDATE users
+          SET email = ?, pending_email = NULL, verify_token = NULL, status = 'active',
+              updated_at = datetime('now')
+          WHERE id = ?
+        `).run(discordEmail || user.pending_email || user.email, user.id);
       }
       db.prepare(`
         UPDATE users
@@ -548,166 +546,62 @@ app.get('/invite/:token', (req, res) => {
 // ---------------------------------------------------------------------------
 // Onboarding
 // ---------------------------------------------------------------------------
+// Setup: Die E-Mail kommt automatisch aus dem Discord-Konto und ist nicht
+// aenderbar. Der Nutzer legt nur noch sein Passwort fest -> sofort aktiv.
 app.get('/onboard/setup', requireLogin, (req, res) => {
   if (req.user.status !== 'pending_setup') return res.redirect('/');
-  res.render('onboard-setup', { title: 'Konto einrichten', values: {} });
+  res.render('onboard-setup', {
+    title: 'Konto einrichten',
+    discordEmail: req.user.email || '',
+    values: {},
+  });
 });
 
 app.post('/onboard/setup', requireLogin, async (req, res) => {
   if (req.user.status !== 'pending_setup') return res.redirect('/');
 
-  const email = String(req.body.email || '').trim().toLowerCase();
+  const email = String(req.user.email || '').trim().toLowerCase();
   const password = String(req.body.password || '');
   const confirm = String(req.body.password_confirm || '');
   const errors = [];
 
-  if (!EMAIL_RE.test(email)) errors.push('Bitte gib eine gueltige E-Mail-Adresse an.');
+  if (!EMAIL_RE.test(email)) errors.push('Keine gueltige E-Mail-Adresse in deinem Discord-Konto hinterlegt.');
   if (password.length < 8) errors.push('Das Passwort muss mindestens 8 Zeichen lang sein.');
   if (password !== confirm) errors.push('Die Passwoerter stimmen nicht ueberein.');
 
-  const emailTaken = db.prepare('SELECT id FROM users WHERE LOWER(email) = LOWER(?) AND id != ?').get(email, req.user.id);
-  if (emailTaken) errors.push('Diese E-Mail-Adresse wird bereits von einem anderen Konto verwendet.');
-
   if (errors.length) {
-    return res.status(400).render('onboard-setup', { title: 'Konto einrichten', errors, values: { email } });
+    return res.status(400).render('onboard-setup', {
+      title: 'Konto einrichten',
+      discordEmail: email,
+      errors,
+      values: {},
+    });
   }
 
-  const code = genOtp();
-  const codeHash = await bcrypt.hash(code, 10);
   const passwordHash = await bcrypt.hash(password, 10);
 
   db.prepare(`
     UPDATE users
-    SET pending_email = ?, password_hash = ?, verify_token = ?, status = 'pending_email',
-        updated_at = datetime('now')
+    SET password_hash = ?, status = 'active', updated_at = datetime('now')
     WHERE id = ?
-  `).run(email, passwordHash, codeHash, req.user.id);
+  `).run(passwordHash, req.user.id);
 
-  const mailOk = await sendVerifyCode(req.user.id, email);
-  if (!mailOk) {
-    flash(req, 'error', 'Die E-Mail mit dem Verifizierungscode konnte nicht versendet werden. Bitte versuche es nach dem Weiterleiten erneut.');
-  } else {
-    flash(req, 'success', 'Ein Verifizierungscode wurde an deine E-Mail-Adresse gesendet.');
-  }
-  res.redirect('/onboard/verify');
-});
-
-// Verify-Seite: Beim ersten Aufruf (wenn noch kein Code versendet wurde)
-// den Code automatisch generieren und versenden.
-app.get('/onboard/verify', requireLogin, async (req, res) => {
-  if (req.user.status !== 'pending_email') return res.redirect('/');
-
-  const needsSend = !req.user.last_mail_sent_at;
-  let sendError = false;
-  let debugStatus = '';
-  if (needsSend) {
-    sendError = !(await sendVerifyCode(req.user.id, req.user.pending_email));
-    debugStatus = sendError
-      ? `Autoversand um ${new Date().toLocaleTimeString('de-DE')} an ${req.user.pending_email} FEHLGESCHLAGEN (siehe Server-Log)`
-      : `Autoversand um ${new Date().toLocaleTimeString('de-DE')} an ${req.user.pending_email} ausgefuehrt`;
-  } else {
-    debugStatus = `Code wurde zuletzt am ${req.user.last_mail_sent_at} gesendet (an ${req.user.pending_email})`;
-  }
-
-  const user = db.prepare('SELECT last_mail_sent_at FROM users WHERE id = ?').get(req.user.id);
-  res.render('onboard-verify', {
-    title: 'E-Mail verifizieren',
-    sentAt: user.last_mail_sent_at || null,
-    error: sendError ? 'Der Code konnte gerade nicht versendet werden. Bitte versuche es in einer Minute erneut.' : null,
-    debugStatus,
-  });
-});
-
-// Verifizierungscode erneut senden (z. B. wenn die erste Mail im Spam landete
-// oder beim ersten Versuch noch kein SMTP konfiguriert war).
-app.post('/onboard/verify/resend', requireLogin, async (req, res) => {
-  if (req.user.status !== 'pending_email') return res.redirect('/');
-
-  // Max. 1 Mail pro 60 Sekunden, um Missbrauch/Spam zu vermeiden.
-  const lastSent = req.user.last_mail_sent_at;
-  if (lastSent && (Date.now() - new Date(lastSent).getTime()) < 60 * 1000) {
-    return res.status(429).render('onboard-verify', {
-      title: 'E-Mail verifizieren',
-      sentAt: lastSent,
-      error: 'Bitte warte kurz, bevor du den Code erneut anforderst.',
-    });
-  }
-
-  const mailOk = await sendVerifyCode(req.user.id, req.user.pending_email);
-  if (!mailOk) {
-    return res.status(502).render('onboard-verify', {
-      title: 'E-Mail verifizieren',
-      sentAt: req.user.last_mail_sent_at || null,
-      error: 'Der Code konnte gerade nicht versendet werden. Bitte versuche es in einer Minute erneut.',
-      debugStatus: `Resend um ${new Date().toLocaleTimeString('de-DE')} an ${req.user.pending_email} FEHLGESCHLAGEN (siehe Server-Log)`,
-    });
-  }
-  flash(req, 'success', 'Ein neuer Verifizierungscode wurde gesendet.');
-  res.redirect('/onboard/verify');
-});
-
-app.post('/onboard/verify', requireLogin, async (req, res) => {
-  if (req.user.status !== 'pending_email') return res.redirect('/');
-
-  const code = String(req.body.code || '').trim();
-  const ok = req.user.verify_token && (await bcrypt.compare(code, req.user.verify_token));
-
-  if (!ok) {
-    return res.status(400).render('onboard-verify', {
-      title: 'E-Mail verifizieren',
-      error: 'Der Code ist ungueltig. Bitte pruefe die E-Mail.',
-    });
-  }
-
-  db.prepare(`
-    UPDATE users
-    SET email = pending_email, pending_email = NULL, verify_token = NULL,
-        status = 'active', updated_at = datetime('now')
-    WHERE id = ?
-  `).run(req.user.id);
-
-  logAccountAction(req.user.id, req.user.id, 'activated', 'E-Mail verifiziert, Konto aktiviert');
-  flash(req, 'success', 'E-Mail verifiziert. Dein Konto ist jetzt aktiv!');
+  logAccountAction(req.user.id, req.user.id, 'activated', 'Konto per Discord-Login eingerichtet');
+  flash(req, 'success', 'Konto eingerichtet. Du bist jetzt angemeldet!');
   res.redirect('/dashboard');
 });
 
-app.get('/onboard/otp', requireLogin, (req, res) => {
-  if (req.user.status !== 'invited') return res.redirect('/');
-  res.render('onboard-otp', { title: 'Einmalpasswort eingeben', inviteEmail: req.user.email });
-});
-
-app.post('/onboard/otp', requireLogin, async (req, res) => {
-  if (req.user.status !== 'invited') return res.redirect('/');
-
-  const otp = String(req.body.otp || '').trim();
-  const ok = req.user.otp_hash
-    && req.user.otp_expires && new Date(req.user.otp_expires) > new Date()
-    && (await bcrypt.compare(otp, req.user.otp_hash));
-
-  if (!ok) {
-    return res.status(400).render('onboard-otp', {
-      title: 'Einmalpasswort eingeben',
-      error: 'Das Einmalpasswort ist ungueltig oder abgelaufen.',
-      inviteEmail: req.user.email,
-    });
-  }
-
-  db.prepare(`
-    UPDATE users SET otp_hash = NULL, otp_expires = NULL, status = 'pending_password',
-        updated_at = datetime('now')
-    WHERE id = ?
-  `).run(req.user.id);
-
-  res.redirect('/onboard/password');
-});
+// Verify- und OTP-Routen wurden entfernt: Die E-Mail kommt aus dem Discord-
+// Konto, ein Einmalpasswort gibt es nicht mehr. Nach dem Discord-Login wird
+// direkt nur noch das Passwort festgelegt.
 
 app.get('/onboard/password', requireLogin, (req, res) => {
-  if (req.user.status !== 'pending_password') return res.redirect('/');
+  if (req.user.status !== 'invited' && req.user.status !== 'pending_password') return res.redirect('/');
   res.render('onboard-password', { title: 'Passwort festlegen' });
 });
 
 app.post('/onboard/password', requireLogin, async (req, res) => {
-  if (req.user.status !== 'pending_password') return res.redirect('/');
+  if (req.user.status !== 'invited' && req.user.status !== 'pending_password') return res.redirect('/');
 
   const password = String(req.body.password || '');
   const confirm = String(req.body.password_confirm || '');
@@ -1462,7 +1356,7 @@ app.get('/admin/accounts', requireRoot, (req, res) => {
     ORDER BY
       CASE u.role WHEN 'hrhr' THEN 0 ELSE 1 END,
       CASE u.status WHEN 'active' THEN 0 WHEN 'invited' THEN 1 WHEN 'pending_password' THEN 1
-           WHEN 'pending_setup' THEN 1 WHEN 'pending_email' THEN 1 WHEN 'disabled' THEN 2 ELSE 3 END,
+           WHEN 'pending_setup' THEN 1 WHEN 'disabled' THEN 2 ELSE 3 END,
       u.username ASC
   `).all(...params);
 
@@ -1476,7 +1370,7 @@ app.get('/admin/accounts', requireRoot, (req, res) => {
 
   const stats = {
     hr: db.prepare("SELECT COUNT(*) AS c FROM users WHERE role = 'hr' AND status != 'deleted'").get().c,
-    invited: db.prepare("SELECT COUNT(*) AS c FROM users WHERE status IN ('invited','pending_password','pending_setup','pending_email')").get().c,
+    invited: db.prepare("SELECT COUNT(*) AS c FROM users WHERE status IN ('invited','pending_password','pending_setup')").get().c,
     disabled: db.prepare("SELECT COUNT(*) AS c FROM users WHERE status = 'disabled'").get().c,
     total: db.prepare("SELECT COUNT(*) AS c FROM users WHERE role IN ('hr','hrhr') AND status != 'deleted'").get().c,
   };
@@ -1550,20 +1444,17 @@ app.post('/admin/accounts/invite', requireRoot, async (req, res) => {
     return res.redirect('/admin/accounts');
   }
 
-  const otp = genOtp();
-  const otpHash = await bcrypt.hash(otp, 10);
   const inviteToken = crypto.randomBytes(24).toString('hex');
-  const expires = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
 
   const info = db.prepare(`
-    INSERT INTO users (username, discord_username, email, role, status, otp_hash, otp_expires, invite_token, created_at, updated_at)
-    VALUES (?, ?, ?, 'hr', 'invited', ?, ?, ?, datetime('now'), datetime('now'))
-  `).run(discordUsername, discordUsername, email, otpHash, expires, inviteToken);
+    INSERT INTO users (username, discord_username, email, role, status, invite_token, created_at, updated_at)
+    VALUES (?, ?, ?, 'hr', 'invited', ?, datetime('now'), datetime('now'))
+  `).run(discordUsername, discordUsername, email, inviteToken);
 
-  await mailer.sendInvite(email, `${BASE_URL}/invite/${inviteToken}`, otp);
+  await mailer.sendInvite(email, `${BASE_URL}/invite/${inviteToken}`);
   logAccountAction(info.lastInsertRowid, req.user.id, 'invited', `Eingeladen als Team (${discordUsername}, ${email})`);
 
-  flash(req, 'success', `Einladung an ${email} gesendet (inkl. Einmalpasswort).`);
+  flash(req, 'success', `Einladung an ${email} gesendet.`);
   res.redirect('/admin/accounts');
 });
 
@@ -1598,17 +1489,14 @@ app.post('/admin/accounts/:id/enable', requireRoot, async (req, res) => {
   const neverCompleted = !target.password_hash;
 
   if (neverCompleted) {
-    // Einladung war noch nicht abgeschlossen -> erneut einladen
-    const otp = genOtp();
-    const otpHash = await bcrypt.hash(otp, 10);
+    // Einladung war noch nicht abgeschlossen -> erneut einladen (ohne OTP)
     const inviteToken = crypto.randomBytes(24).toString('hex');
-    const expires = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
     db.prepare(`
-      UPDATE users SET status = 'invited', otp_hash = ?, otp_expires = ?, invite_token = ?,
+      UPDATE users SET status = 'invited', invite_token = ?,
           disabled_reason = NULL, disabled_at = NULL, disabled_by = NULL, updated_at = datetime('now')
       WHERE id = ?
-    `).run(otpHash, expires, inviteToken, target.id);
-    await mailer.sendInvite(target.email, `${BASE_URL}/invite/${inviteToken}`, otp);
+    `).run(inviteToken, target.id);
+    await mailer.sendInvite(target.email, `${BASE_URL}/invite/${inviteToken}`);
   } else {
     db.prepare(`
       UPDATE users SET status = 'active', disabled_reason = NULL, disabled_at = NULL, disabled_by = NULL,

@@ -170,33 +170,24 @@ function findMail(subjectPart) {
   base = `http://127.0.0.1:${server.address().port}`;
 
   // ==================================================================
-  // 1) HR-HR-Onboarding (jlg09 per Discord -> Setup -> E-Mail-Code)
+  // 1) HR-HR-Onboarding (jlg09 per Discord -> Setup mit Discord-E-Mail)
   // ==================================================================
-  let hrhrCookie = await discordLogin('jlg09', 'JLG09');
+  let hrhrCookie = await discordLogin('jlg09', 'JLG09', 'jlg09@example.com');
   ok('HR-HR: Discord-Login liefert Session', hrhrCookie.length > 0);
 
   let r = await get('/', hrhrCookie);
   ok('HR-HR: wird zum Setup geleitet (pending_setup)', r.status === 302 && r.location === '/onboard/setup', r.location);
 
+  let mail;
+
   r = await get('/onboard/setup', hrhrCookie);
   ok('HR-HR: Setup-Seite erreichbar', r.status === 200 && r.body.includes('Konto einrichten'));
+  ok('HR-HR: E-Mail aus Discord vorausgefuellt (nicht aenderbar)', r.body.includes('jlg09@example.com'));
 
   r = await post('/onboard/setup', {
-    email: 'jlg09@example.com', password: 'SuperGeheim123', password_confirm: 'SuperGeheim123',
+    password: 'SuperGeheim123', password_confirm: 'SuperGeheim123',
   }, hrhrCookie);
-  ok('HR-HR: Setup gesendet -> Verifizierung', r.status === 302 && r.location === '/onboard/verify', r.location);
-
-  let mail = latestMail();
-  ok('HR-HR: Verifizierungs-E-Mail gesendet', mail && mail.subject.includes('E-Mail-Verifizierung'), mail ? mail.subject : 'keine Mail');
-
-  r = await get('/onboard/verify', hrhrCookie);
-  ok('HR-HR: Verify-Seite erreichbar', r.status === 200);
-
-  r = await post('/onboard/verify', { code: '000000' }, hrhrCookie);
-  ok('HR-HR: falscher Code abgelehnt', r.status === 400);
-
-  r = await post('/onboard/verify', { code: mail.code }, hrhrCookie);
-  ok('HR-HR: richtiger Code -> aktiv', r.status === 302 && r.location === '/dashboard', r.location);
+  ok('HR-HR: Setup gesendet -> direkt aktiv (kein Verify-Code)', r.status === 302 && r.location === '/dashboard', r.location);
 
   r = await get('/dashboard', hrhrCookie);
   ok('HR-HR: Dashboard erreichbar, Rolle HR-HR', r.status === 200 && r.body.includes('Meine Tickets'));
@@ -204,12 +195,13 @@ function findMail(subjectPart) {
   const hrhrUser = db.prepare('SELECT * FROM users WHERE discord_username = ?').get('jlg09');
   ok('HR-HR: Rolle = hrhr, Status = active', hrhrUser.role === 'hrhr' && hrhrUser.status === 'active', `${hrhrUser.role}/${hrhrUser.status}`);
   ok('HR-HR: is_root gesetzt (festegelegter HR-HR)', hrhrUser.is_root === 1);
+  ok('HR-HR: E-Mail kommt aus Discord', hrhrUser.email === 'jlg09@example.com', hrhrUser.email);
 
   r = await get('/admin/accounts', hrhrCookie);
   ok('HR-HR: Team-Verwaltung erreichbar', r.status === 200 && r.body.includes('Team-Verwaltung'));
 
   // ==================================================================
-  // 2) Passwort-Login des HR-HR
+  // 2) Passwort-Login des HR-HR (mit der Discord-E-Mail)
   // ==================================================================
   r = await post('/auth/login', { identifier: 'jlg09@example.com', password: 'SuperGeheim123' });
   ok('HR-HR: Passwort-Login funktioniert', r.status === 302 && r.location === '/dashboard', r.location);
@@ -218,16 +210,16 @@ function findMail(subjectPart) {
   ok('HR-HR: falsches Passwort abgelehnt', r.status === 400);
 
   // ==================================================================
-  // 3) HR-Einladung per E-Mail (Link + Einmalpasswort)
+  // 3) HR-Einladung per E-Mail (Link, ohne Einmalpasswort)
   // ==================================================================
   r = await post('/admin/accounts/invite', { email: 'max@beispiel.de', discord_username: 'max.mustermann' }, hrhrCookie);
   ok('HR-HR: Einladung gesendet', r.status === 302 && r.location === '/admin/accounts');
 
   mail = latestMail();
-  ok('HR-HR: Einladungs-E-Mail mit OTP + Link', mail && mail.subject.includes('Einladung'), mail ? mail.subject : 'keine Mail');
+  ok('HR-HR: Einladungs-E-Mail mit Link (ohne OTP)', mail && mail.subject.includes('Einladung'), mail ? mail.subject : 'keine Mail');
   const inviteToken = (mail.raw.match(/\/invite\/([a-f0-9]{48})/) || [])[1];
-  const inviteOtp = mail.code;
-  ok('HR-HR: Einladung enthaelt Link + OTP', !!inviteToken && !!inviteOtp, `token=${inviteToken ? inviteToken.slice(0, 8) : 'keins'} otp=${inviteOtp}`);
+  ok('HR-HR: Einladung enthaelt Link', !!inviteToken, `token=${inviteToken ? inviteToken.slice(0, 8) : 'keins'}`);
+  ok('HR-HR: Einladungs-Mail enthaelt KEIN Einmalpasswort', mail && !mail.code, mail ? `code=${mail.code}` : 'keine Mail');
 
   const invited = db.prepare("SELECT * FROM users WHERE status = 'invited'").get();
   ok('HR-HR: Eingeladener Account angelegt (Rolle hr)', invited && invited.role === 'hr', invited ? invited.role : 'fehlt');
@@ -236,21 +228,15 @@ function findMail(subjectPart) {
   r = await get(`/invite/${inviteToken}`);
   ok('Einladungslink zeigt Landeseite', r.status === 200 && r.body.includes('Du wurdest eingeladen'));
 
-  // Eingeladener meldet sich mit Discord an (Username passt)
-  let hrCookie = await discordLogin('max.mustermann', 'Max Mustermann');
+  // Eingeladener meldet sich mit Discord an (Username passt, mit E-Mail)
+  let hrCookie = await discordLogin('max.mustermann', 'Max Mustermann', 'max@beispiel.de');
   ok('Eingeladener: Discord-Login liefert Session', hrCookie.length > 0);
 
   r = await get('/', hrCookie);
-  ok('Eingeladener: wird zum OTP geleitet', r.status === 302 && r.location === '/onboard/otp', r.location);
+  ok('Eingeladener: wird direkt zum Passwort geleitet (kein OTP)', r.status === 302 && r.location === '/onboard/password', r.location);
 
-  r = await get('/onboard/otp', hrCookie);
-  ok('Eingeladener: OTP-Seite erreichbar', r.status === 200);
-
-  r = await post('/onboard/otp', { otp: '999999' }, hrCookie);
-  ok('Eingeladener: falsches OTP abgelehnt', r.status === 400);
-
-  r = await post('/onboard/otp', { otp: inviteOtp }, hrCookie);
-  ok('Eingeladener: richtiges OTP -> Passwort festlegen', r.status === 302 && r.location === '/onboard/password', r.location);
+  r = await get('/onboard/password', hrCookie);
+  ok('Eingeladener: Passwort-Seite erreichbar', r.status === 200);
 
   r = await post('/onboard/password', { password: 'HrPasswort123', password_confirm: 'HrPasswort123' }, hrCookie);
   ok('Eingeladener: Passwort gesetzt -> aktiv', r.status === 302 && r.location === '/dashboard', r.location);

@@ -5,7 +5,7 @@
       <div class="login-logo">🔐</div>
       <h1>Konto einrichten</h1>
       <p class="muted">Dein Discord-Konto <strong><%= user.global_name || user.username %></strong> wurde erkannt.
-      Lege jetzt deine E-Mail-Adresse und ein Passwort fest.</p>
+      Lege jetzt dein Passwort fest.</p>
 
       <% if (typeof errors !== 'undefined' && errors && errors.length) { %>
         <div class="alert alert-error">
@@ -17,9 +17,9 @@
 
       <form method="post" action="/onboard/setup" class="login-form">
         <div class="form-group">
-          <label for="email">E-Mail-Adresse *</label>
-          <input type="email" id="email" name="email" required value="<%= values.email || '' %>">
-          <p class="hint">An diese Adresse schicken wir einen Verifizierungscode.</p>
+          <label for="email">E-Mail-Adresse (aus deinem Discord-Konto)</label>
+          <input type="email" id="email" value="<%= discordEmail %>" disabled>
+          <p class="hint">Diese E-Mail kommt aus deinem Discord-Konto und kann nicht geändert werden.</p>
         </div>
         <div class="form-group">
           <label for="password">Passwort *</label>
@@ -29,7 +29,7 @@
           <label for="password_confirm">Passwort wiederholen *</label>
           <input type="password" id="password_confirm" name="password_confirm" required minlength="8" autocomplete="new-password">
         </div>
-        <button type="submit" class="btn btn-primary btn-lg" style="width:100%;">Weiter zur Verifizierung</button>
+        <button type="submit" class="btn btn-primary btn-lg" style="width:100%;">Konto fertig einrichten</button>
       </form>
 
       <form method="post" action="/auth/logout" class="inline-form" style="margin-top:14px;">

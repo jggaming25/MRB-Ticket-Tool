@@ -80,10 +80,6 @@ function layout(title, bodyHtml) {
 </html>`;
 }
 
-function codeBox(code) {
-  return `<div style="margin:16px 0;background:#0f1117;border:1px solid #5865f2;border-radius:8px;padding:14px;font-size:26px;font-weight:800;letter-spacing:4px;text-align:center;color:#fff;">${escapeHtml(code)}</div>`;
-}
-
 function writeMailLog(to, subject, html) {
   const dir = path.join(__dirname, 'mail-log');
   fs.mkdirSync(dir, { recursive: true });
@@ -121,7 +117,7 @@ async function sendMail({ to, subject, html }) {
   return true;
 }
 
-async function sendInvite(to, inviteUrl, otp) {
+async function sendInvite(to, inviteUrl) {
   const body = `
     <p>Hallo!</p>
     <p>Du wurdest als <strong>Teammitglied</strong> für das TicketSystem MRB eingeladen.</p>
@@ -130,19 +126,8 @@ async function sendInvite(to, inviteUrl, otp) {
     <p style="text-align:center;margin:20px 0;">
       <a href="${escapeHtml(inviteUrl)}" style="display:inline-block;background:#5865f2;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:700;">Einladung annehmen</a>
     </p>
-    <p>Nach der Discord-Anmeldung wirst du nach diesem <strong>Einmalpasswort</strong> gefragt:</p>
-    ${codeBox(otp)}
-    <p>Anschließend legst du dein eigenes Passwort fest. Das Einmalpasswort ist 24&nbsp;Stunden gültig.</p>`;
+    <p>Nach der Discord-Anmeldung legst du nur noch dein eigenes Passwort fest und bist danach sofort einsatzbereit.</p>`;
   return sendMail({ to, subject: '🎫 Einladung zum TicketSystem MRB', html: layout('Einladung zum TicketSystem MRB', body) });
-}
-
-async function sendVerificationCode(to, code) {
-  const body = `
-    <p>Hallo!</p>
-    <p>Um deine E-Mail-Adresse für das TicketSystem MRB zu verifizieren, gib folgenden Code ein:</p>
-    ${codeBox(code)}
-    <p>Der Code ist 30&nbsp;Minuten gültig.</p>`;
-  return sendMail({ to, subject: '🎫 E-Mail-Verifizierung (TicketSystem MRB)', html: layout('E-Mail-Verifizierung', body) });
 }
 
 async function sendAccountDisabled(to, reason) {
@@ -253,7 +238,6 @@ async function testConnection() {
 
 module.exports = {
   sendInvite,
-  sendVerificationCode,
   sendAccountDisabled,
   sendAccountReactivated,
   sendAccountDeleted,

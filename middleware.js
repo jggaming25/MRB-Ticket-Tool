@@ -9,7 +9,6 @@ const STATUS_LABELS = {
   invited: 'Eingeladen',
   pending_password: 'Passwort ausstehend',
   pending_setup: 'Setup ausstehend',
-  pending_email: 'E-Mail ausstehend',
   disabled: 'Deaktiviert',
   deleted: 'Gelöscht',
 };
@@ -125,10 +124,9 @@ function onboardingGuard(req, res, next) {
     return next();
   }
   switch (req.user.status) {
-    case 'invited': return res.redirect('/onboard/otp');
+    case 'invited':
     case 'pending_password': return res.redirect('/onboard/password');
     case 'pending_setup': return res.redirect('/onboard/setup');
-    case 'pending_email': return res.redirect('/onboard/verify');
     case 'disabled':
     case 'deleted':
       req.session.destroy(() => {});
