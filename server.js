@@ -1753,6 +1753,9 @@ if (require.main === module) {
     if (!process.env.SMTP_HOST) {
       console.warn('WARNUNG: SMTP nicht konfiguriert. E-Mails landen im Ordner mail-log/ statt in echten Postfächern.');
     }
+    // Einmaliger SMTP-Selbsttest: loggt sofort sichtbar, ob der Versand
+    // überhaupt funktionieren kann (oder warum nicht).
+    mailer.testConnection();
   });
 }
 

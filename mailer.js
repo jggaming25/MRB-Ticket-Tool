@@ -22,6 +22,10 @@ if (process.env.NODE_ENV !== 'test' && process.env.SMTP_HOST && process.env.SMTP
     connectionTimeout: 30000,
     greetingTimeout: 30000,
     socketTimeout: 40000,
+    // Auf Cloud-Hosts (z. B. Render) erzwingt diese Option IPv4. Manche
+    // SMTP-Server (Brevo) haben keine funktionierende IPv6-Verbindung, wodurch
+    // der Versand sonst in einem endlosen Timeout hängen bleibt.
+    family: 4,
   });
 }
 
@@ -219,6 +223,25 @@ async function sendPasswordReset(to, resetUrl) {
   return sendMail({ to, subject: '🔑 Passwort zurücksetzen (TicketSystem MRB)', html: layout('Passwort zurücksetzen', body) });
 }
 
+// Einmaliger SMTP-Selbsttest beim Serverstart: Prüft, ob die SMTP-Verbindung
+// zu Brevo überhaupt aufgebaut werden kann und loggt das Ergebnis sichtbar.
+async function testConnection() {
+  if (!transporter) {
+    console.warn('[MAIL] SMTP-Selbsttest: kein SMTP konfiguriert (Mails landen im mail-log/)');
+    return;
+  }
+  try {
+    const ok = await withSendTimeout(transporter.verify());
+    if (ok) {
+      console.log(`[MAIL] SMTP-Selbsttest OK: ${process.env.SMTP_HOST}:${process.env.SMTP_PORT} (User ${process.env.SMTP_USER}) erreichbar`);
+    } else {
+      console.error(`[MAIL] SMTP-Selbsttest FEHLGESCHLAGEN: Verbindung zu ${process.env.SMTP_HOST}:${process.env.SMTP_PORT} hat die Zeitueberschreitung erreicht`);
+    }
+  } catch (err) {
+    console.error(`[MAIL] SMTP-Selbsttest FEHLGESCHLAGEN: ${err.message}`);
+  }
+}
+
 module.exports = {
   sendInvite,
   sendVerificationCode,
@@ -231,4 +254,5 @@ module.exports = {
   sendPasswordReset,
   ticketUrl,
   escapeHtml,
+  testConnection,
 };
