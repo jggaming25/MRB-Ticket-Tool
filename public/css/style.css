@@ -434,7 +434,8 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
   border-radius: var(--radius);
   padding: 12px 14px;
 }
-.msg-mine { border-color: rgba(88, 101, 242, 0.4); }
+.msg-owner { border-color: rgba(250, 204, 21, 0.6); background: rgba(250, 204, 21, 0.07); }
+.msg-staff { border-color: rgba(88, 101, 242, 0.45); }
 .msg-system {
   justify-content: center;
   background: transparent;

@@ -300,8 +300,11 @@ function findMail(subjectPart) {
   mail = findMail('Neuigkeiten');
   ok('Kunde: Aktivitaets-E-Mail bei Support-Antwort', !!mail, mail ? mail.subject : 'keine Mail');
 
-  // Fälligkeit + nächste Aktion setzen
-  r = await post(`/admin/tickets/${ticketId}/due`, { hours: '48', next_action: 'Rückfrage an den Kunden' }, hrCookie);
+  // Fälligkeit + nächste Aktion setzen (Datumsangabe)
+  const future = new Date(Date.now() + 48 * 3600 * 1000);
+  const pad2 = (n) => String(n).padStart(2, '0');
+  const futureLocal = `${future.getFullYear()}-${pad2(future.getMonth() + 1)}-${pad2(future.getDate())}T${pad2(future.getHours())}:${pad2(future.getMinutes())}`;
+  r = await post(`/admin/tickets/${ticketId}/due`, { due_at: futureLocal, next_action: 'Rückfrage an den Kunden' }, hrCookie);
   ok('HR setzt Faelligkeit + naechste Aktion', r.status === 302);
   const dueTicket = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId);
   ok('Faelligkeit: due_at gesetzt + naechste Aktion', !!dueTicket.due_at && dueTicket.next_action === 'Rückfrage an den Kunden', `due=${dueTicket.due_at} act=${dueTicket.next_action}`);
@@ -359,6 +362,13 @@ function findMail(subjectPart) {
   ok('HR-HR oeffnet wieder', r.status === 302);
   const reopened = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId);
   ok('Reopen: Status open', reopened.status === 'open');
+
+  // Inhaber kann ein Ticket sofort schliessen, ohne dass Team erst freigibt
+  r = await post(ticketUrl + '/close', {}, hrhrCookie);
+  const instantClosed = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId);
+  ok('Inhaber: Ticket sofort schliessen (ohne Freigabe)', r.status === 302 && instantClosed.status === 'closed');
+  r = await post(ticketUrl + '/reopen', {}, hrhrCookie);
+  ok('Inhaber: wieder geoeffnet', r.status === 302);
 
   // ==================================================================
   // 6) Überfälligkeit, CSV, QuickJump, Admin-Suche

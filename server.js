@@ -144,6 +144,13 @@ app.use((req, res, next) => {
     if (Number.isNaN(d.getTime())) return iso;
     return d.toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short' });
   };
+  res.locals.toLocalInput = (iso) => {
+    if (!iso) return '';
+    const d = new Date(iso.endsWith('Z') ? iso : iso.replace(' ', 'T') + 'Z');
+    if (Number.isNaN(d.getTime())) return '';
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
   next();
 });
 
@@ -719,7 +726,7 @@ app.get('/tickets/:id', requireLogin, loadTicketFor, (req, res) => {
     // Nur HR-HR schließt Tickets. HR-Bearbeiter stellen sie zur Freigabe.
     canRelease: isHR(req.user) && !isHRHR(req.user) && ticket.status === 'pending' && ticket.claimed_by === req.user.id,
     canSetDue: canEdit && !isClosed,
-    canClose: isHRHR(req.user) && ticket.status === 'release' && !isClosed,
+    canClose: isHRHR(req.user) && !isClosed,
     canReopen: isHRHR(req.user) && isClosed,
   });
 });
@@ -778,8 +785,8 @@ app.post('/tickets/:id/message', requireLogin, loadTicketFor, upload.single('att
 // Schließen: ausschliesslich HR-HR und nur wenn das Ticket zur Freigabe steht.
 app.post('/tickets/:id/close', requireHRHR, loadTicketFor, async (req, res) => {
   const { ticket } = req;
-  if (ticket.status !== 'release') {
-    flash(req, 'error', 'Ein Ticket kann nur geschlossen werden, wenn es zur Freigabe vorgelegt wurde.');
+  if (ticket.status === 'closed') {
+    flash(req, 'error', 'Das Ticket ist bereits geschlossen.');
     return res.redirect(`/tickets/${ticket.id}`);
   }
   const now = new Date().toISOString();
@@ -1075,9 +1082,14 @@ app.post('/admin/tickets/:id/due', requireHR, loadTicketFor, async (req, res) =>
     return res.redirect(`/tickets/${ticket.id}`);
   }
 
-  const hours = Number(req.body.hours);
-  if (!Number.isFinite(hours) || hours < 1 || hours > 24 * 30) {
-    flash(req, 'error', 'Ungültiger Zeitraum (1–720 Stunden).');
+  const dueRaw = String(req.body.due_at || '').trim();
+  if (!dueRaw) {
+    flash(req, 'error', 'Bitte ein Fälligkeits-Datum angeben.');
+    return res.redirect(`/tickets/${ticket.id}`);
+  }
+  const parsedDue = new Date(dueRaw);
+  if (Number.isNaN(parsedDue.getTime())) {
+    flash(req, 'error', 'Ungültiges Fälligkeits-Datum.');
     return res.redirect(`/tickets/${ticket.id}`);
   }
   const nextAction = String(req.body.next_action || '').trim();
@@ -1086,7 +1098,7 @@ app.post('/admin/tickets/:id/due', requireHR, loadTicketFor, async (req, res) =>
     return res.redirect(`/tickets/${ticket.id}`);
   }
 
-  const due = new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
+  const due = parsedDue.toISOString();
   db.prepare(`
     UPDATE tickets SET due_at = ?, next_action = ?, status = CASE WHEN status = 'open' THEN 'pending' ELSE status END,
         updated_at = ? WHERE id = ?

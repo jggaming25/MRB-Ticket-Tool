@@ -84,8 +84,8 @@
 
       <div class="thread" id="last">
         <% messages.forEach((m) => { %>
-          <% const mine = m.user_id === user.id; %>
-          <div class="msg <%= m.is_system ? 'msg-system' : (mine ? 'msg-mine' : 'msg-other') %>" id="msg-<%= m.id %>">
+          <% const isOwnerMsg = m.user_id === ticket.user_id; %>
+          <div class="msg <%= m.is_system ? 'msg-system' : (isOwnerMsg ? 'msg-owner' : 'msg-staff') %>" id="msg-<%= m.id %>">
             <% if (!m.is_system) { %>
               <img class="msg-avatar" src="<%= m.avatar ? 'https://cdn.discordapp.com/avatars/' + m.discord_id + '/' + m.avatar + '.png?size=64' : '/static/img/placeholder.svg' %>" alt="" data-fallback="/static/img/placeholder.svg">
             <% } %>
@@ -177,8 +177,9 @@
             <h3>Fälligkeit & nächste Aktion</h3>
             <form method="post" action="/admin/tickets/<%= ticket.id %>/due">
               <div class="form-group">
-                <label for="due-hours">In X Stunden fällig</label>
-                <input class="input" type="number" id="due-hours" name="hours" min="1" max="720" value="24" required>
+                <label for="due-at">Fällig am</label>
+                <input class="input" type="datetime-local" id="due-at" name="due_at"
+                       value="<%= toLocalInput(ticket.due_at) %>" required>
               </div>
               <div class="form-group">
                 <label for="due-action">Nächste Aktion</label>
