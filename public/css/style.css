@@ -247,12 +247,30 @@ main {
 .claim-notice { margin-top: 12px; margin-bottom: 0; }
 
 /* Rollen */
+.role-user { background: var(--card-2); color: var(--text); }
 .role-hr { background: var(--blue-bg); color: #93c5fd; }
 .role-hrhr { background: rgba(180, 83, 9, 0.2); color: #fcd34d; }
 
+/* Kontoeinstellungen: Checkbox-Zeile */
+.checkbox-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 0;
+  cursor: pointer;
+}
+.checkbox-row input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+  accent-color: #5865f2;
+  flex-shrink: 0;
+}
+.checkbox-row .hint { display: block; }
+.notify-form .btn { margin-top: 8px; }
+
 /* Account-Status */
 .acc-active { background: var(--green-bg); color: #86efac; }
-.acc-invited, .acc-pending_password, .acc-pending_setup, .acc-pending_email { background: var(--yellow-bg); color: #fcd34d; }
 .acc-disabled { background: var(--red-bg); color: #fca5a5; }
 .acc-deleted { background: var(--card-2); color: var(--muted); text-decoration: line-through; }
 

@@ -1,9 +1,10 @@
 'use strict';
 
-// Integrationstest: simuliert alle Rollen (Nutzer / HR / HR-HR) und Flows
-// (Discord-Login, HR-HR-Onboarding mit E-Mail-Verifizierung, HR-Einladung
-//  mit Einmalpasswort, Ticket-Lebenszyklus inkl. Übergabe/Fälligkeit/Freigabe/
-//  Schließen, Kunden-Mails, CSV-Export, Passwort-Reset, Deaktivieren/Löschen).
+// Integrationstest: simuliert alle Rollen (Nutzer / Team / Inhaber) und Flows
+// (Discord-Login ohne Einladung/Passwort, automatische Inhaber-Zuordnung,
+// Rollenvergabe durch den Inhaber, Ticket-Lebenszyklus inkl. Übernahme/
+// Übergabe/Fälligkeit/Freigabe/Schließen, Kunden-Mails, CSV-Export,
+// Deaktivieren/Löschen, Kontoeinstellungen).
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -170,89 +171,57 @@ function findMail(subjectPart) {
   base = `http://127.0.0.1:${server.address().port}`;
 
   // ==================================================================
-  // 1) HR-HR-Onboarding (jlg09 per Discord -> Setup mit Discord-E-Mail)
+  // 1) Inhaber-Login (jlg09 per Discord) -> sofort aktiv, keine Einladung
   // ==================================================================
   let hrhrCookie = await discordLogin('jlg09', 'JLG09', 'jlg09@example.com');
-  ok('HR-HR: Discord-Login liefert Session', hrhrCookie.length > 0);
+  ok('Inhaber: Discord-Login liefert Session', hrhrCookie.length > 0);
 
   let r = await get('/', hrhrCookie);
-  ok('HR-HR: wird zum Setup geleitet (pending_setup)', r.status === 302 && r.location === '/onboard/setup', r.location);
+  ok('Inhaber: kein Setup/Onboarding noetig (direkt nutzbar)', r.status === 200, `${r.status}`);
 
   let mail;
 
-  r = await get('/onboard/setup', hrhrCookie);
-  ok('HR-HR: Setup-Seite erreichbar', r.status === 200 && r.body.includes('Konto einrichten'));
-  ok('HR-HR: E-Mail aus Discord vorausgefuellt (nicht aenderbar)', r.body.includes('jlg09@example.com'));
-
-  r = await post('/onboard/setup', {
-    password: 'SuperGeheim123', password_confirm: 'SuperGeheim123',
-  }, hrhrCookie);
-  ok('HR-HR: Setup gesendet -> direkt aktiv (kein Verify-Code)', r.status === 302 && r.location === '/dashboard', r.location);
-
   r = await get('/dashboard', hrhrCookie);
-  ok('HR-HR: Dashboard erreichbar, Rolle HR-HR', r.status === 200 && r.body.includes('Meine Tickets'));
+  ok('Inhaber: Dashboard erreichbar, Rolle Inhaber', r.status === 200 && r.body.includes('Meine Tickets'));
 
   const hrhrUser = db.prepare('SELECT * FROM users WHERE discord_username = ?').get('jlg09');
-  ok('HR-HR: Rolle = hrhr, Status = active', hrhrUser.role === 'hrhr' && hrhrUser.status === 'active', `${hrhrUser.role}/${hrhrUser.status}`);
-  ok('HR-HR: is_root gesetzt (festegelegter HR-HR)', hrhrUser.is_root === 1);
-  ok('HR-HR: E-Mail kommt aus Discord', hrhrUser.email === 'jlg09@example.com', hrhrUser.email);
+  ok('Inhaber: Rolle = hrhr, Status = active', hrhrUser.role === 'hrhr' && hrhrUser.status === 'active', `${hrhrUser.role}/${hrhrUser.status}`);
+  ok('Inhaber: is_root gesetzt (festegelegter Inhaber)', hrhrUser.is_root === 1);
+  ok('Inhaber: E-Mail kommt aus Discord', hrhrUser.email === 'jlg09@example.com', hrhrUser.email);
 
   r = await get('/admin/accounts', hrhrCookie);
-  ok('HR-HR: Team-Verwaltung erreichbar', r.status === 200 && r.body.includes('Team-Verwaltung'));
+  ok('Inhaber: Team-Verwaltung erreichbar', r.status === 200 && r.body.includes('Team-Verwaltung'));
+
+  // Passwort-Login existiert nicht mehr -> Route weg (404)
+  r = await post('/auth/login', { identifier: 'jlg09@example.com', password: 'x' });
+  ok('Kein E-Mail/Passwort-Login mehr (Route entfernt)', r.status === 404, `Status ${r.status}`);
 
   // ==================================================================
-  // 2) Passwort-Login des HR-HR (mit der Discord-E-Mail)
+  // 2) Nutzer loggt sich per Discord ein, Inhaber ernennt ihn zum Team
   // ==================================================================
-  r = await post('/auth/login', { identifier: 'jlg09@example.com', password: 'SuperGeheim123' });
-  ok('HR-HR: Passwort-Login funktioniert', r.status === 302 && r.location === '/dashboard', r.location);
-  ok('HR-HR: Passwort-Login setzt Cookie', cookieFromRes(r).length > 0);
-  r = await post('/auth/login', { identifier: 'jlg09@example.com', password: 'falsch123' });
-  ok('HR-HR: falsches Passwort abgelehnt', r.status === 400);
-
-  // ==================================================================
-  // 3) HR-Einladung per E-Mail (Link, ohne Einmalpasswort)
-  // ==================================================================
-  r = await post('/admin/accounts/invite', { email: 'max@beispiel.de', discord_username: 'max.mustermann' }, hrhrCookie);
-  ok('HR-HR: Einladung gesendet', r.status === 302 && r.location === '/admin/accounts');
-
-  mail = latestMail();
-  ok('HR-HR: Einladungs-E-Mail mit Link (ohne OTP)', mail && mail.subject.includes('Einladung'), mail ? mail.subject : 'keine Mail');
-  const inviteToken = (mail.raw.match(/\/invite\/([a-f0-9]{48})/) || [])[1];
-  ok('HR-HR: Einladung enthaelt Link', !!inviteToken, `token=${inviteToken ? inviteToken.slice(0, 8) : 'keins'}`);
-  ok('HR-HR: Einladungs-Mail enthaelt KEIN Einmalpasswort', mail && !mail.code, mail ? `code=${mail.code}` : 'keine Mail');
-
-  const invited = db.prepare("SELECT * FROM users WHERE status = 'invited'").get();
-  ok('HR-HR: Eingeladener Account angelegt (Rolle hr)', invited && invited.role === 'hr', invited ? invited.role : 'fehlt');
-
-  // Einladungslink ohne Login
-  r = await get(`/invite/${inviteToken}`);
-  ok('Einladungslink zeigt Landeseite', r.status === 200 && r.body.includes('Du wurdest eingeladen'));
-
-  // Eingeladener meldet sich mit Discord an (Username passt, mit E-Mail)
   let hrCookie = await discordLogin('max.mustermann', 'Max Mustermann', 'max@beispiel.de');
-  ok('Eingeladener: Discord-Login liefert Session', hrCookie.length > 0);
+  ok('Nutzer: Discord-Login liefert Session', hrCookie.length > 0);
 
-  r = await get('/', hrCookie);
-  ok('Eingeladener: wird direkt zum Passwort geleitet (kein OTP)', r.status === 302 && r.location === '/onboard/password', r.location);
+  const maxUser = db.prepare("SELECT * FROM users WHERE discord_username = 'max.mustermann'").get();
+  ok('Nutzer: Rolle = user, Status = active (Standard nach erstem Login)', maxUser && maxUser.role === 'user' && maxUser.status === 'active', maxUser ? `${maxUser.role}/${maxUser.status}` : 'fehlt');
 
-  r = await get('/onboard/password', hrCookie);
-  ok('Eingeladener: Passwort-Seite erreichbar', r.status === 200);
+  // Ohne Einladung: kein Onboarding-Link, kein Passwort-Link erreichbar
+  r = await get('/invite/egal', hrhrCookie);
+  ok('Einladungslink existiert nicht mehr (404)', r.status === 404, `Status ${r.status}`);
+  r = await get('/onboard/password', maxUser ? await cookieFor(maxUser.id) : '');
+  ok('Onboarding-Route existiert nicht mehr (404)', r.status === 404, `Status ${r.status}`);
 
-  r = await post('/onboard/password', { password: 'HrPasswort123', password_confirm: 'HrPasswort123' }, hrCookie);
-  ok('Eingeladener: Passwort gesetzt -> aktiv', r.status === 302 && r.location === '/dashboard', r.location);
+  // Inhaber ernennt den Nutzer per Rollenvergabe zum Team
+  r = await post(`/admin/accounts/${maxUser.id}/role`, { role: 'hr' }, hrhrCookie);
+  ok('Inhaber: Nutzer zum Team ernannt', r.status === 302 && r.location === '/admin/accounts');
+  const hrUser = db.prepare('SELECT * FROM users WHERE id = ?').get(maxUser.id);
+  ok('Team: Rolle = hr, bleibt aktiv', hrUser && hrUser.role === 'hr' && hrUser.status === 'active', hrUser ? `${hrUser.role}/${hrUser.status}` : 'fehlt');
 
   r = await get('/dashboard', hrCookie);
-  ok('Eingeladener: Dashboard erreichbar, Rolle HR', r.status === 200 && r.body.includes('Meine Tickets'));
-
-  const hrUser = db.prepare("SELECT * FROM users WHERE discord_username = 'max.mustermann'").get();
-  ok('HR: Rolle = hr, Status = active', hrUser && hrUser.role === 'hr' && hrUser.status === 'active', hrUser ? `${hrUser.role}/${hrUser.status}` : 'fehlt');
-
-  // Passwort-Login des HR
-  r = await post('/auth/login', { identifier: 'max@beispiel.de', password: 'HrPasswort123' });
-  ok('HR: Passwort-Login funktioniert', r.status === 302 && r.location === '/dashboard');
+  ok('Team: Dashboard erreichbar, Rolle Team', r.status === 200 && r.body.includes('Meine Tickets'));
 
   // ==================================================================
-  // 4) Normaler Nutzer per Discord (nicht authorisiert, mit E-Mail)
+  // 3) Normaler Nutzer per Discord (nicht authorisiert, mit E-Mail)
   // ==================================================================
   let userCookie = await discordLogin('lisa_wasmacht', 'Lisa', 'lisa@example.com');
   ok('Normaler Nutzer: Discord-Login erzeugt Account', userCookie.length > 0);
@@ -431,18 +400,21 @@ function findMail(subjectPart) {
   ok('Rolle bleibt HR (kein unberechtigter Aufstieg)', stillHr.role === 'hr', stillHr.role);
 
   r = await get('/admin/logs', hrhrCookie);
-  ok('HR-HR: Audit-Log-Seite erreichbar', r.status === 200 && r.body.includes('Audit-Log'));
+  ok('Inhaber: Audit-Log-Seite erreichbar', r.status === 200 && r.body.includes('Audit-Log'));
   r = await get('/admin/logs', hrCookie);
-  ok('HR: Audit-Log verboten (403)', r.status === 403);
+  ok('Team: Audit-Log verboten (403)', r.status === 403);
 
-  // Passwort-Reset per Admin
-  r = await post(`/admin/accounts/${hrUser.id}/reset-password`, {}, hrhrCookie);
-  ok('HR-HR: Passwort-Reset-Mail ausloesbar', r.status === 302);
-  mail = findMail('Passwort zurücksetzen');
-  ok('Reset-Mail an Betroffenen gesendet', !!mail, mail ? mail.subject : 'keine Mail');
+  // Rückstufung Team -> Nutzer durch den Inhaber
+  r = await post(`/admin/accounts/${hrUser.id}/role`, { role: 'user' }, hrhrCookie);
+  ok('Inhaber: Team zum Nutzer zurueckgestuft', r.status === 302);
+  const downgraded = db.prepare('SELECT * FROM users WHERE id = ?').get(hrUser.id);
+  ok('Rolle = user nach Rueckstufung', downgraded.role === 'user', downgraded.role);
+  // Zurueck zum Team, damit der Rest des Tests weiterlaufen kann
+  r = await post(`/admin/accounts/${hrUser.id}/role`, { role: 'hr' }, hrhrCookie);
+  ok('Inhaber: wieder zum Team ernannt', r.status === 302);
 
   r = await post(`/admin/accounts/${hrUser.id}/disable`, { reason: 'Schlechte Performance' }, hrhrCookie);
-  ok('HR-HR: HR deaktiviert (mit Grund)', r.status === 302 && r.location === '/admin/accounts');
+  ok('Inhaber: Team deaktiviert (mit Grund)', r.status === 302 && r.location === '/admin/accounts');
   mail = findMail('deaktiviert');
   ok('Deaktivierung: E-Mail an Betroffenen', !!mail, mail ? mail.subject : 'keine Mail');
   ok('Deaktivierung: E-Mail enthaelt Begruendung', mail && mail.raw.includes('Schlechte Performance'));
@@ -450,9 +422,9 @@ function findMail(subjectPart) {
   const disabledUser = db.prepare('SELECT * FROM users WHERE id = ?').get(hrUser.id);
   ok('Deaktivierung: Status = disabled', disabledUser.status === 'disabled' && disabledUser.disabled_reason === 'Schlechte Performance');
 
-  // Deaktivierter kann sich nicht mehr per Passwort einloggen
-  r = await post('/auth/login', { identifier: 'max@beispiel.de', password: 'HrPasswort123' });
-  ok('Deaktivierter kann nicht mehr einloggen (403)', r.status === 403);
+  // Deaktivierter Nutzer wird ausgeloggt (Session-Guard zerstört Session)
+  r = await get('/dashboard', hrCookie);
+  ok('Deaktivierter kann nicht mehr auf geschuetzte Seiten', r.status === 302 && r.location === '/login', `${r.status} ${r.location}`);
 
   // Reaktivieren
   r = await post(`/admin/accounts/${hrUser.id}/enable`, { reason: 'Geloest, wieder dabei' }, hrhrCookie);
@@ -475,25 +447,32 @@ function findMail(subjectPart) {
   ok('HR-HR: HR-HR kann nicht geloescht werden', r.status === 400);
 
   const logCount = db.prepare('SELECT COUNT(*) AS c FROM account_logs').get().c;
-  ok('Audit-Log protokolliert Konto-Aktionen', logCount >= 8, `Eintraege: ${logCount}`);
+  ok('Audit-Log protokolliert Konto-Aktionen', logCount >= 5, `Eintraege: ${logCount}`);
 
   // ==================================================================
-  // 8) Passwort vergessen / zurücksetzen
+  // 8) Kontoeinstellungen + Benachrichtigungen
   // ==================================================================
-  r = await get('/forgot-password');
-  ok('Forgot-Password-Seite erreichbar', r.status === 200);
-  r = await post('/forgot-password', { identifier: 'jlg09@example.com' });
-  ok('Forgot-Password: Link-Mail gesendet', r.status === 200);
-  mail = findMail('Passwort zurücksetzen');
-  const resetToken = mail ? (mail.raw.match(/reset-password\?token=([a-f0-9]{64})/) || [])[1] : null;
-  ok('Forgot-Password: Reset-Link extrahiert', !!resetToken);
+  r = await get('/account/settings', userCookie);
+  ok('Kontoeinstellungen erreichbar', r.status === 200 && r.body.includes('Kontoeinstellungen'));
+  r = await post('/account/settings', { notify_changes: '1' }, userCookie);
+  ok('Kontoeinstellungen: Benachrichtigungen aktiviert', r.status === 302 && r.location === '/account/settings');
+  const notifyUser = db.prepare('SELECT * FROM users WHERE id = ?').get(normalUser.id);
+  ok('notify_changes = 1 gespeichert', notifyUser.notify_changes === 1, `value=${notifyUser.notify_changes}`);
 
-  r = await get(`/reset-password?token=${resetToken}`);
-  ok('Reset-Seite erreichbar', r.status === 200);
-  r = await post('/reset-password', { token: resetToken, password: 'NeuesPasswort99', password_confirm: 'NeuesPasswort99' });
-  ok('Reset: Passwort gesetzt -> Login', r.status === 302 && r.location === '/login', r.location);
-  r = await post('/auth/login', { identifier: 'jlg09@example.com', password: 'NeuesPasswort99' });
-  ok('Login mit neuem Passwort funktioniert', r.status === 302 && r.location === '/dashboard');
+  // Polling-Endpoint: nur eigene Tickets fuer Nutzer
+  const t = db.prepare('SELECT * FROM tickets ORDER BY id DESC LIMIT 1').get();
+  r = await get(`/api/tickets/updates?since=${encodeURIComponent('2020-01-01T00:00:00.000Z')}`, userCookie);
+  ok('Benachrichtigungs-API liefert JSON', r.status === 200 && r.body.includes('tickets'));
+  const updates = JSON.parse(r.body);
+  const hasOwn = updates.tickets.some((x) => x.id === t.id);
+  ok('Nutzer: eigenes Ticket in Updates enthalten', hasOwn);
+
+  r = await get('/api/tickets/updates?since=kaputt', userCookie);
+  ok('Benachrichtigungs-API: ungueltiges since -> 400', r.status === 400);
+
+  // Ohne Login: Einstellungen nicht erreichbar
+  r = await get('/account/settings');
+  ok('Kontoeinstellungen ohne Login -> Login-Weiterleitung', r.status === 302 && r.location === '/login');
 
   // ==================================================================
   // 9) Sicherheit / Randfaelle
@@ -507,6 +486,18 @@ function findMail(subjectPart) {
   ok('Startseite oeffentlich erreichbar', r.status === 200 && r.body.includes('Mitteldeutsche Regionalbahn'));
   r = await get('/dashboard');
   ok('Ohne Login: Dashboard leitet zu /login', r.status === 302 && r.location === '/login');
+
+  // Session-Lebensdauer: Discord-Login-Cookie laeuft in 14 Tagen ab
+  const freshAuth = await get('/auth/discord');
+  const freshState = new URL(freshAuth.location).searchParams.get('state');
+  mockDiscord = { id: String(Date.now() + 9e6), username: 'frisch', global_name: 'Frisch', email: 'frisch@example.com', verified: true };
+  const freshCb = await get(`/auth/callback?code=FAKECODE&state=${freshState}`);
+  const setCookie = (freshCb.headers && freshCb.headers.get && freshCb.headers.get('set-cookie')) || freshCb.setCookie || '';
+  const maxAge = /Max-Age=(\d+)/.exec(setCookie);
+  const expires = /Expires=([^;]+)/.exec(setCookie);
+  const daysUntil = expires ? (new Date(expires[1]).getTime() - Date.now()) / (24 * 3600 * 1000) : null;
+  const ok14d = maxAge ? Number(maxAge[1]) === 14 * 24 * 60 * 60 : (daysUntil !== null && daysUntil >= 13 && daysUntil <= 15);
+  ok('Session-Cookie: 14 Tage Laufzeit', ok14d, maxAge ? `Max-Age=${maxAge[1]}` : expires ? `Expires in ${daysUntil.toFixed(1)} Tagen` : 'kein Ablaufdatum');
 
   const logoutRes = await fetch(base + '/auth/logout', {
     method: 'POST', headers: { cookie: userCookie }, redirect: 'manual',

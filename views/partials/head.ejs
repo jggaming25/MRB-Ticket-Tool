@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="/static/css/style.css?v=<%= assetVersion %>">
   <link rel="icon" href="/static/logo.png">
 </head>
-<body>
+<body data-user-id="<%= user ? user.id : '' %>" data-notify-enabled="<%= user && user.notify_changes === 1 ? '1' : '0' %>">
   <header class="topbar">
     <div class="container topbar-inner">
       <a class="brand" href="/">
@@ -19,6 +19,7 @@
           <a class="nav-link <%= currentPath === '/' ? 'active' : '' %>" href="/">Home</a>
           <a class="nav-link <%= currentPath === '/dashboard' ? 'active' : '' %>" href="/dashboard">Meine Tickets</a>
           <a class="nav-link <%= currentPath.startsWith('/tickets/new') ? 'active' : '' %>" href="/tickets/new">Neues Ticket</a>
+          <a class="nav-link <%= currentPath.startsWith('/account/settings') ? 'active' : '' %>" href="/account/settings">Einstellungen</a>
           <% if (isHR) { %>
             <a class="nav-link <%= currentPath === '/admin' ? 'active' : '' %>" href="/admin">Alle Tickets</a>
             <% if (config.staffLinks && config.staffLinks.length) { %>

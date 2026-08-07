@@ -4,7 +4,7 @@
     <div class="login-card">
       <img class="login-logo" src="/static/logo.png" alt="<%= brand %> Logo">
       <h1>TicketSystem MRB</h1>
-      <p class="muted">Melde dich an, um deine Tickets zu verwalten.</p>
+      <p class="muted">Melde dich mit deinem Discord-Konto an, um deine Tickets zu verwalten.</p>
 
       <% if (typeof error !== 'undefined' && error) { %>
         <div class="alert alert-error"><%= error %></div>
@@ -16,26 +16,8 @@
         </svg>
         Mit Discord einloggen
       </button>
-      <p class="hint">Du musst Mitglied unseres Discord-Servers sein, sonst wird der Login abgelehnt.</p>
-
-      <div class="divider"><span>oder mit E-Mail &amp; Passwort</span></div>
-
-      <form method="post" action="/auth/login" class="login-form">
-        <div class="form-group">
-          <label for="identifier">E-Mail oder Benutzername</label>
-          <input type="text" id="identifier" name="identifier" required autocomplete="username" value="<%= values.identifier || '' %>">
-        </div>
-        <div class="form-group">
-          <label for="password">Passwort</label>
-          <input type="password" id="password" name="password" required autocomplete="current-password">
-        </div>
-        <button type="submit" class="btn btn-primary btn-lg btn-block">Anmelden</button>
-      </form>
-
-      <p class="muted small" style="margin-top:16px;">
-        Passwort vergessen? <a href="/forgot-password">Hier klicken</a>.<br>
-        Neu hier? Melde dich mit deinem Discord-Konto an. Teammitglieder erhalten ihre Einladung per E-Mail.
-      </p>
+      <p class="hint">Du musst Mitglied unseres Discord-Servers sein, sonst wird der Login abgelehnt.
+      Die Anmeldung bleibt bis zu 14 Tage aktiv.</p>
     </div>
   </div>
 

@@ -117,19 +117,6 @@ async function sendMail({ to, subject, html }) {
   return true;
 }
 
-async function sendInvite(to, inviteUrl) {
-  const body = `
-    <p>Hallo!</p>
-    <p>Du wurdest als <strong>Teammitglied</strong> für das TicketSystem MRB eingeladen.</p>
-    <p>Klicke auf den Link und melde dich anschließend mit deinem <strong>Discord-Konto</strong> an
-    (ein Popup-Fenster öffnet sich), um die Einladung anzunehmen:</p>
-    <p style="text-align:center;margin:20px 0;">
-      <a href="${escapeHtml(inviteUrl)}" style="display:inline-block;background:#5865f2;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:700;">Einladung annehmen</a>
-    </p>
-    <p>Nach der Discord-Anmeldung legst du nur noch dein eigenes Passwort fest und bist danach sofort einsatzbereit.</p>`;
-  return sendMail({ to, subject: '🎫 Einladung zum TicketSystem MRB', html: layout('Einladung zum TicketSystem MRB', body) });
-}
-
 async function sendAccountDisabled(to, reason) {
   const body = `
     <p>Hallo!</p>
@@ -197,17 +184,6 @@ async function sendTicketAssignedToHR(to, ticketNumber, subject, fromName) {
   return sendMail({ to, subject: `🎫 Dir wurde Ticket #${String(ticketNumber).padStart(4, '0')} übergeben`, html: layout('Ticket übergeben', body) });
 }
 
-async function sendPasswordReset(to, resetUrl) {
-  const body = `
-    <p>Hallo!</p>
-    <p>Du hast ein neues Passwort für das TicketSystem MRB angefordert.</p>
-    <p style="text-align:center;margin:20px 0;">
-      <a href="${escapeHtml(resetUrl)}" style="display:inline-block;background:#5865f2;color:#fff;padding:12px 22px;border-radius:8px;text-decoration:none;font-weight:700;">Passwort zurücksetzen</a>
-    </p>
-    <p>Der Link ist 1&nbsp;Stunde gültig. Wenn du das nicht angefordert hast, kannst du diese E-Mail ignorieren.</p>`;
-  return sendMail({ to, subject: '🔑 Passwort zurücksetzen (TicketSystem MRB)', html: layout('Passwort zurücksetzen', body) });
-}
-
 // Einmaliger SMTP-Selbsttest beim Serverstart: Prüft, ob die SMTP-Verbindung
 // zu Brevo überhaupt aufgebaut werden kann und loggt das Ergebnis sichtbar.
 // Zeigt bei Fehlern den konkreten Grund (DNS, ECONNREFUSED, ETIMEDOUT, TLS, Auth).
@@ -237,14 +213,12 @@ async function testConnection() {
 }
 
 module.exports = {
-  sendInvite,
   sendAccountDisabled,
   sendAccountReactivated,
   sendAccountDeleted,
   sendTicketCreated,
   sendTicketActivity,
   sendTicketAssignedToHR,
-  sendPasswordReset,
   ticketUrl,
   escapeHtml,
   testConnection,

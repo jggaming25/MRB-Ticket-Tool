@@ -98,3 +98,76 @@ function setLoading(btn, loading) {
   if (loading) btn.classList.add('is-loading');
   else btn.classList.remove('is-loading');
 }
+
+// ---- Desktop-Benachrichtigungen bei Ticketänderungen --------------------
+// Pollt die Änderungen an sichtbaren Tickets und zeigt eine Browser-/
+// Windows-Benachrichtigung an, sobald sich etwas getan hat. Nur aktiv, wenn
+// der Nutzer es in den Kontoeinstellungen aktiviert hat.
+(function setupTicketNotifications() {
+  const body = document.body;
+  if (!body.dataset.notifyEnabled || body.dataset.notifyEnabled !== '1') return;
+  if (!('Notification' in window)) return;
+
+  const button = document.getElementById('enable-notifications');
+  const permHint = document.getElementById('notify-permission');
+
+  function updatePermissionUI() {
+    if (!button || !permHint) return;
+    if (Notification.permission === 'granted') {
+      permHint.textContent = 'Aktiviert.';
+      button.style.display = 'none';
+    } else if (Notification.permission === 'denied') {
+      permHint.textContent = 'Im Browser blockiert. Bitte in den Browser-Einstellungen erlauben.';
+    } else {
+      permHint.textContent = '';
+    }
+  }
+
+  if (button) {
+    button.addEventListener('click', () => {
+      Notification.requestPermission().then(updatePermissionUI);
+    });
+  }
+
+  updatePermissionUI();
+
+  if (Notification.permission !== 'granted') return;
+
+  const storageKey = `notify:lastUpdate:${body.dataset.userId || ''}`;
+  let lastUpdate = localStorage.getItem(storageKey) || new Date().toISOString();
+
+  async function poll() {
+    if (document.hidden) return;
+    let res;
+    try {
+      res = await fetch(`/api/tickets/updates?since=${encodeURIComponent(lastUpdate)}`);
+    } catch {
+      return; // Offline / Server nicht erreichbar
+    }
+    if (!res.ok) return;
+    const { tickets } = await res.json();
+    if (!tickets || !tickets.length) return;
+
+    const newest = tickets[0].updated_at;
+    if (newest > lastUpdate) lastUpdate = newest;
+    localStorage.setItem(storageKey, lastUpdate);
+
+    const single = tickets[0];
+    const title = tickets.length > 1
+      ? `${tickets.length} Tickets haben Änderungen`
+      : `Ticket #${String(single.number).padStart(4, '0')} hat Änderungen`;
+    const notification = new Notification(title, {
+      body: tickets.length > 1
+        ? `${single.subject} u.a. – Klick zum Öffnen`
+        : `${single.subject}`,
+      icon: '/static/logo.png',
+    });
+    notification.onclick = () => {
+      window.focus();
+      window.location.href = `/tickets/${single.id}`;
+      notification.close();
+    };
+  }
+
+  setInterval(poll, 30000); // alle 30 s
+})();

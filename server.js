@@ -10,7 +10,6 @@ const session = require('express-session');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const multer = require('multer');
-const bcrypt = require('bcryptjs');
 
 const { db, isRemote, DB_PATH: dbPaths, nextTicketNumber, insertSystemMessage, logAccountAction, logTicketAction } = require('./db');
 const discord = require('./discord');
@@ -108,7 +107,7 @@ app.use(session({
     httpOnly: true,
     sameSite: 'lax',
     secure: process.env.NODE_ENV === 'production' || BASE_URL.startsWith('https://'),
-    maxAge: 7 * 24 * 60 * 60 * 1000, // 7 Tage
+    maxAge: 14 * 24 * 60 * 60 * 1000, // 14 Tage (Discord-Session)
   },
 }));
 
@@ -182,12 +181,10 @@ function flash(req, type, text) {
   req.session.flash = { type, text };
 }
 
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
 // Verifizierung per E-Mail-Code wurde entfernt: Die E-Mail wird direkt aus dem
-// Discord-Konto uebernommen und ist nicht aenderbar. Es gibt keine Einmal-
-// passwoerter (OTP) mehr – nach dem Discord-Login wird nur noch ein Passwort
-// festgelegt.
+// Discord-Konto uebernommen und ist nicht aenderbar. Einmalpasswörter (OTP),
+// Einladungen und Passwort-Login gibt es nicht mehr – die Anmeldung läuft
+// ausschliesslich über Discord.
 
 // ---------------------------------------------------------------------------
 // Kunden-/Mail-Helfer
@@ -288,14 +285,6 @@ function ticketsToCsv(tickets) {
 // ---------------------------------------------------------------------------
 // Auth-Routen
 // ---------------------------------------------------------------------------
-const loginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 20,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: 'Zu viele Anmeldeversuche. Bitte warte 15 Minuten.' },
-});
-
 const authLimiter = rateLimit({
   windowMs: 10 * 60 * 1000,
   max: 60,
@@ -315,56 +304,7 @@ const fileDownloadLimiter = rateLimit({
 
 app.get('/login', (req, res) => {
   if (req.user) return res.redirect('/dashboard');
-  res.render('login', { title: 'Login', values: {} });
-});
-
-app.post('/auth/login', loginLimiter, async (req, res) => {
-  const identifier = String(req.body.identifier || '').trim();
-  const password = String(req.body.password || '');
-
-  const user = db.prepare(`
-    SELECT * FROM users
-    WHERE LOWER(email) = LOWER(?) OR LOWER(username) = LOWER(?) OR LOWER(discord_username) = LOWER(?)
-  `).get(identifier, identifier, identifier);
-
-  if (!user || !user.password_hash) {
-    return res.status(400).render('login', {
-      title: 'Login',
-      error: 'Login fehlgeschlagen. Bitte pruefe deine Zugangsdaten.',
-      values: { identifier },
-    });
-  }
-
-  const match = await bcrypt.compare(password, user.password_hash);
-  if (!match) {
-    return res.status(400).render('login', {
-      title: 'Login',
-      error: 'Login fehlgeschlagen. Bitte pruefe deine Zugangsdaten.',
-      values: { identifier },
-    });
-  }
-
-  if (user.status === 'disabled' || user.status === 'deleted') {
-    return res.status(403).render('login', {
-      title: 'Login',
-      error: `Dein Konto ist deaktiviert.${user.disabled_reason ? ` Grund: ${user.disabled_reason}` : ''}`,
-      values: { identifier },
-    });
-  }
-  if (user.status !== 'active') {
-    return res.status(403).render('login', {
-      title: 'Login',
-      error: 'Dein Konto ist noch nicht vollstaendig aktiviert. Schliesse die Einladung oder das Setup ab.',
-      values: { identifier },
-    });
-  }
-
-  db.prepare('UPDATE users SET last_login = datetime(\'now\') WHERE id = ?').run(user.id);
-  req.session.regenerate((err) => {
-    if (err) throw err;
-    req.session.userId = user.id;
-    res.redirect('/dashboard');
-  });
+  res.render('login', { title: 'Login' });
 });
 
 app.get('/auth/discord', authLimiter, (req, res) => {
@@ -407,71 +347,31 @@ app.get('/auth/callback', authLimiter, async (req, res) => {
       ? dUser.email.trim().toLowerCase()
       : null;
 
-    // Seit der Abschaffung der E-Mail-Verifizierung ist die Discord-E-Mail
-    // die einzige Quelle. HR-HR/HR-Konten brauchen zwingend eine verifizierte
-    // E-Mail, sonst wird der Login blockiert (Anweisung: hinterlege in Discord
-    // eine E-Mail-Adresse). Normale Kunden duerfen ohne E-Mail weiter.
-    const needsEmail = discord.isAuthorizedDiscord(dUser) || discord.matchesAnyPendingInvite(dUser);
-    if (needsEmail && !discordEmail) {
+    // Der Inhaber (aus AUTHORIZED_DISCORD_USERNAMES) braucht zwingend eine
+    // verifizierte E-Mail, sonst wird der Login blockiert (Anweisung:
+    // hinterlege in Discord eine E-Mail-Adresse). Normale Nutzer duerfen
+    // ohne E-Mail weiter.
+    if (discord.isAuthorizedDiscord(dUser) && !discordEmail) {
       return renderError(res, 403, 'E-Mail-Adresse fehlt',
         'Dein Discord-Konto hat keine verifizierte E-Mail-Adresse. Hinterlege und bestaetige '
         + 'in Discord eine E-Mail-Adresse (Discord > Einstellungen > Mein Konto). Danach kannst '
         + 'du dich hier anmelden.');
     }
 
-    // 1) Passende offene Einladung? (wichtigste Pruefung zuerst)
-    const pendingInvites = db.prepare(`
-      SELECT * FROM users WHERE status = 'invited' AND discord_username IS NOT NULL
-    `).all();
-    const invite = pendingInvites.find((u) => discord.matchesDiscordUsername(u.discord_username, dUser));
-
     let user = db.prepare('SELECT * FROM users WHERE discord_id = ?').get(dUser.id);
 
-    if (invite) {
-      if (!user) {
-        // Discord-Konto noch unbekannt -> an Einladung haengen
-        db.prepare(`
-          UPDATE users
-          SET discord_id = ?, discord_username = ?, username = ?, global_name = ?,
-              avatar = ?, updated_at = datetime('now')
-          WHERE id = ?
-        `).run(dUser.id, dUser.username, dUser.global_name || dUser.username, dUser.global_name || null, dUser.avatar || null, invite.id);
-        user = db.prepare('SELECT * FROM users WHERE id = ?').get(invite.id);
-      } else if (user.id !== invite.id) {
-        // Konto existiert bereits (normaler Nutzer) -> zur HR-Einladung erhoehen
-        db.prepare(`
-          UPDATE users
-          SET role = 'hr', status = 'invited', invite_token = ?,
-              discord_username = ?, username = ?, global_name = ?, avatar = ?,
-              updated_at = datetime('now')
-          WHERE id = ?
-        `).run(invite.invite_token, dUser.username,
-          dUser.global_name || dUser.username, dUser.global_name || null, dUser.avatar || null, user.id);
-        db.prepare("UPDATE users SET status = 'deleted', disabled_reason = 'Durch bestehendes Konto ersetzt' WHERE id = ?").run(invite.id);
-        user = db.prepare('SELECT * FROM users WHERE id = ?').get(user.id);
-      }
-    }
-
-    // 2) Neues Konto
     if (!user) {
-      if (discord.isAuthorizedDiscord(dUser)) {
-        // HR-HR: erstes Login -> nur noch Passwort festlegen (E-Mail kommt aus Discord)
-        const info = db.prepare(`
-          INSERT INTO users (discord_id, discord_username, username, global_name, avatar, email, role, status, is_root, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, 'hrhr', 'pending_setup', 1, datetime('now'), datetime('now'))
-        `).run(dUser.id, dUser.username, dUser.global_name || dUser.username, dUser.global_name || null,
-          dUser.avatar || null, discordEmail);
-        user = db.prepare('SELECT * FROM users WHERE id = ?').get(info.lastInsertRowid);
+      // Neues Konto: Inhaber (aus der Konfiguration) bzw. normaler Nutzer.
+      // Beide sind sofort aktiv – es gibt kein Setup und kein Passwort mehr.
+      const isOwner = discord.isAuthorizedDiscord(dUser);
+      const info = db.prepare(`
+        INSERT INTO users (discord_id, discord_username, username, global_name, avatar, email, role, status, is_root, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, datetime('now'), datetime('now'))
+      `).run(dUser.id, dUser.username, dUser.global_name || dUser.username, dUser.global_name || null,
+        dUser.avatar || null, discordEmail, isOwner ? 'hrhr' : 'user', isOwner ? 1 : 0);
+      user = db.prepare('SELECT * FROM users WHERE id = ?').get(info.lastInsertRowid);
+      if (isOwner) {
         logAccountAction(user.id, user.id, 'hrhr_created', 'Inhaber-Account per Discord-Registrierung angelegt');
-      } else {
-        // Normaler Nutzer (Kunde) – E-Mail aus Discord übernehmen, damit wir ihn
-        // per E-Mail benachrichtigen koennen, sobald er ein Ticket erstellt.
-        const info = db.prepare(`
-          INSERT INTO users (discord_id, discord_username, username, global_name, avatar, email, role, status, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, 'user', 'active', datetime('now'), datetime('now'))
-        `).run(dUser.id, dUser.username, dUser.global_name || dUser.username, dUser.global_name || null,
-          dUser.avatar || null, discordEmail);
-        user = db.prepare('SELECT * FROM users WHERE id = ?').get(info.lastInsertRowid);
       }
     } else {
       // Bestehendes Konto: Status pruefen
@@ -479,15 +379,25 @@ app.get('/auth/callback', authLimiter, async (req, res) => {
         return renderError(res, 403, 'Konto gesperrt',
           `Dein Konto ist deaktiviert.${user.disabled_reason ? ` Grund: ${user.disabled_reason}` : ''}`);
       }
-      // Altbestand: Konten, die noch in der E-Mail-Verifizierung festhingen
-      // (pending_email), werden direkt aktiviert – die E-Mail steht bereits.
-      if (user.status === 'pending_email') {
+      // Altbestand migrieren: Konten aus der alten E-Mail-Verifizierung
+      // (pending_email) und alte Einladungs-/Setup-Konten (invited,
+      // pending_password, pending_setup) werden direkt aktiviert.
+      if (user.status !== 'active') {
         db.prepare(`
           UPDATE users
-          SET email = ?, pending_email = NULL, verify_token = NULL, status = 'active',
+          SET email = CASE WHEN ? IS NOT NULL THEN ? ELSE COALESCE(email, pending_email) END,
+              pending_email = NULL, verify_token = NULL, invite_token = NULL,
+              otp_hash = NULL, otp_expires = NULL, status = 'active',
               updated_at = datetime('now')
           WHERE id = ?
-        `).run(discordEmail || user.pending_email || user.email, user.id);
+        `).run(discordEmail, discordEmail, user.id);
+      }
+      // Der in der Konfiguration festgelegte Inhaber erhaelt seine Rolle
+      // automatisch – auch wenn sie zwischenzeitlich geaendert wurde.
+      if (discord.isAuthorizedDiscord(dUser) && (user.role !== 'hrhr' || user.is_root !== 1)) {
+        db.prepare(`
+          UPDATE users SET role = 'hrhr', is_root = 1, updated_at = datetime('now') WHERE id = ?
+        `).run(user.id);
       }
       db.prepare(`
         UPDATE users
@@ -516,114 +426,49 @@ app.post('/auth/logout', (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// Einladungs-Landingpage
+// Kontoeinstellungen
 // ---------------------------------------------------------------------------
-app.get('/invite/:token', (req, res) => {
-  const invite = db.prepare(`
-    SELECT * FROM users WHERE invite_token = ? AND status = 'invited'
-  `).get(req.params.token);
-
-  if (!invite) {
-    return renderError(res, 404, 'Einladung nicht gefunden',
-      'Dieser Einladungslink ist ungueltig oder wurde bereits verwendet.');
-  }
-
-  // Falls der eingeloggte Nutzer nicht der Eingeladene ist -> Hinweis
-  if (req.user && !discord.matchesDiscordUsername(invite.discord_username, {
-    username: req.user.discord_username, global_name: req.user.global_name, discriminator: req.user.discriminator,
-  })) {
-    return renderError(res, 403, 'Falsches Konto',
-      `Diese Einladung ist fuer "${invite.discord_username}" (${invite.email}). Du bist als ${req.user.username} eingeloggt.`);
-  }
-
-  res.render('invite', {
-    title: 'Einladung annehmen',
-    invite,
-    inviteUrl: `${BASE_URL}/invite/${req.params.token}`,
+app.get('/account/settings', requireLogin, (req, res) => {
+  res.render('account-settings', {
+    title: 'Kontoeinstellungen',
+    user: req.user,
   });
 });
 
-// ---------------------------------------------------------------------------
-// Onboarding
-// ---------------------------------------------------------------------------
-// Setup: Die E-Mail kommt automatisch aus dem Discord-Konto und ist nicht
-// aenderbar. Der Nutzer legt nur noch sein Passwort fest -> sofort aktiv.
-app.get('/onboard/setup', requireLogin, (req, res) => {
-  if (req.user.status !== 'pending_setup') return res.redirect('/');
-  res.render('onboard-setup', {
-    title: 'Konto einrichten',
-    discordEmail: req.user.email || '',
-    values: {},
-  });
+app.post('/account/settings', requireLogin, (req, res) => {
+  const notify = req.body.notify_changes === '1' ? 1 : 0;
+  db.prepare('UPDATE users SET notify_changes = ?, updated_at = datetime(\'now\') WHERE id = ?')
+    .run(notify, req.user.id);
+  req.user.notify_changes = notify;
+  flash(req, 'success', 'Einstellungen gespeichert.');
+  res.redirect('/account/settings');
 });
 
-app.post('/onboard/setup', requireLogin, async (req, res) => {
-  if (req.user.status !== 'pending_setup') return res.redirect('/');
-
-  const email = String(req.user.email || '').trim().toLowerCase();
-  const password = String(req.body.password || '');
-  const confirm = String(req.body.password_confirm || '');
-  const errors = [];
-
-  if (!EMAIL_RE.test(email)) errors.push('Keine gueltige E-Mail-Adresse in deinem Discord-Konto hinterlegt.');
-  if (password.length < 8) errors.push('Das Passwort muss mindestens 8 Zeichen lang sein.');
-  if (password !== confirm) errors.push('Die Passwoerter stimmen nicht ueberein.');
-
-  if (errors.length) {
-    return res.status(400).render('onboard-setup', {
-      title: 'Konto einrichten',
-      discordEmail: email,
-      errors,
-      values: {},
-    });
+// ---- Benachrichtigungen: Änderungen an sichtbaren Tickets seit Zeitpunkt ----
+// Liefert Ticket-Änderungen, die der eingeloggte Nutzer sehen darf (Nutzer:
+// eigene Tickets; Team/Inhaber: alle Tickets). Der Client pollt diesen
+// Endpoint und zeigt Browser-Benachrichtigungen an.
+app.get('/api/tickets/updates', requireLogin, (req, res) => {
+  const since = String(req.query.since || '');
+  if (!since || Number.isNaN(Date.parse(since))) {
+    return res.status(400).json({ error: 'since (ISO-Datumsangabe) fehlt' });
   }
-
-  const passwordHash = await bcrypt.hash(password, 10);
-
-  db.prepare(`
-    UPDATE users
-    SET password_hash = ?, status = 'active', updated_at = datetime('now')
-    WHERE id = ?
-  `).run(passwordHash, req.user.id);
-
-  logAccountAction(req.user.id, req.user.id, 'activated', 'Konto per Discord-Login eingerichtet');
-  flash(req, 'success', 'Konto eingerichtet. Du bist jetzt angemeldet!');
-  res.redirect('/dashboard');
+  const rows = db.prepare(`
+    SELECT t.id, t.number, t.subject, t.status, t.updated_at
+    FROM tickets t
+    WHERE t.updated_at > ?
+      AND (t.user_id = ? OR (t.claimed_by = ? OR ? = 1))
+    ORDER BY t.updated_at DESC
+    LIMIT 20
+  `).all(since, req.user.id, req.user.id, isHR(req.user) ? 1 : 0);
+  res.json({ tickets: rows });
 });
 
-// Verify- und OTP-Routen wurden entfernt: Die E-Mail kommt aus dem Discord-
-// Konto, ein Einmalpasswort gibt es nicht mehr. Nach dem Discord-Login wird
-// direkt nur noch das Passwort festgelegt.
-
-app.get('/onboard/password', requireLogin, (req, res) => {
-  if (req.user.status !== 'invited' && req.user.status !== 'pending_password') return res.redirect('/');
-  res.render('onboard-password', { title: 'Passwort festlegen' });
-});
-
-app.post('/onboard/password', requireLogin, async (req, res) => {
-  if (req.user.status !== 'invited' && req.user.status !== 'pending_password') return res.redirect('/');
-
-  const password = String(req.body.password || '');
-  const confirm = String(req.body.password_confirm || '');
-  const errors = [];
-  if (password.length < 8) errors.push('Das Passwort muss mindestens 8 Zeichen lang sein.');
-  if (password !== confirm) errors.push('Die Passwoerter stimmen nicht ueberein.');
-
-  if (errors.length) {
-    return res.status(400).render('onboard-password', { title: 'Passwort festlegen', errors });
-  }
-
-  const passwordHash = await bcrypt.hash(password, 10);
-  db.prepare(`
-    UPDATE users SET password_hash = ?, invite_token = NULL, status = 'active',
-        last_login = datetime('now'), updated_at = datetime('now')
-    WHERE id = ?
-  `).run(passwordHash, req.user.id);
-
-  logAccountAction(req.user.id, req.user.id, 'activated', 'HR-Einladung abgeschlossen, Passwort gesetzt');
-  flash(req, 'success', 'Dein Konto ist jetzt vollstaendig aktiv!');
-  res.redirect('/dashboard');
-});
+// ---------------------------------------------------------------------------
+// Onboarding wurde entfernt: Es gibt keine Einladungen, keine Passwort-Setups
+// und kein Passwort-Login mehr. Die Anmeldung laeuft ausschliesslich ueber
+// Discord, und jeder Account ist direkt nach dem Login aktiv.
+// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // Ticket-Routen
@@ -729,81 +574,6 @@ app.post('/dashboard/jump', requireLogin, (req, res) => {
     return res.redirect('/dashboard');
   }
   res.redirect(`/tickets/${ticket.id}`);
-});
-
-// ---------------------------------------------------------------------------
-// Passwort zurücksetzen (Vergessen) – benoetigt eine hinterlegte E-Mail.
-// ---------------------------------------------------------------------------
-app.get('/forgot-password', (req, res) => {
-  if (req.user) return res.redirect('/dashboard');
-  res.render('forgot-password', { title: 'Passwort vergessen', error: null, sent: false });
-});
-
-app.post('/forgot-password', loginLimiter, async (req, res) => {
-  const identifier = String(req.body.identifier || '').trim();
-
-  const user = db.prepare(`
-    SELECT * FROM users WHERE LOWER(email) = LOWER(?) OR LOWER(username) = LOWER(?)
-  `).get(identifier, identifier);
-
-  // Aus Sicherheitsgruenden immer dieselbe Antwort geben
-  if (!user || !user.email || !user.password_hash || user.status === 'deleted') {
-    return res.render('forgot-password', {
-      title: 'Passwort vergessen', error: null, sent: true,
-    });
-  }
-
-  const token = crypto.randomBytes(32).toString('hex');
-  const expires = new Date(Date.now() + 60 * 60 * 1000).toISOString(); // 1 Stunde
-  db.prepare('UPDATE users SET reset_token = ?, reset_expires = ? WHERE id = ?')
-    .run(token, expires, user.id);
-
-  await mailer.sendPasswordReset(user.email, `${BASE_URL}/reset-password?token=${token}`);
-  res.render('forgot-password', { title: 'Passwort vergessen', error: null, sent: true });
-});
-
-app.get('/reset-password', (req, res) => {
-  if (req.user) return res.redirect('/dashboard');
-  const token = String(req.query.token || '');
-  const user = db.prepare(`
-    SELECT * FROM users WHERE reset_token = ? AND reset_expires IS NOT NULL
-  `).get(token);
-  if (!user || new Date(user.reset_expires) < new Date()) {
-    return renderError(res, 400, 'Ungueltiger Link',
-      'Dieser Link ist ungueltig oder abgelaufen. Fordere einen neuen an.');
-  }
-  res.render('reset-password', { title: 'Passwort zurücksetzen', token, error: null });
-});
-
-app.post('/reset-password', async (req, res) => {
-  const token = String(req.body.token || '');
-  const user = db.prepare(`
-    SELECT * FROM users WHERE reset_token = ? AND reset_expires IS NOT NULL
-  `).get(token);
-  if (!user || new Date(user.reset_expires) < new Date()) {
-    return renderError(res, 400, 'Ungueltiger Link',
-      'Dieser Link ist ungueltig oder abgelaufen. Fordere einen neuen an.');
-  }
-
-  const password = String(req.body.password || '');
-  const confirm = String(req.body.password_confirm || '');
-  if (password.length < 8 || password !== confirm) {
-    return res.status(400).render('reset-password', {
-      title: 'Passwort zurücksetzen', token, error: 'Das Passwort muss mindestens 8 Zeichen lang sein und beide Eingaben muessen uebereinstimmen.',
-    });
-  }
-
-  const passwordHash = await bcrypt.hash(password, 10);
-  db.prepare(`
-    UPDATE users SET password_hash = ?, reset_token = NULL, reset_expires = NULL,
-        status = CASE WHEN status = 'disabled' THEN 'disabled' ELSE 'active' END,
-        updated_at = datetime('now')
-    WHERE id = ?
-  `).run(passwordHash, user.id);
-
-  logAccountAction(user.id, user.id, 'password_reset', 'Passwort per "Vergessen"-Link zurückgesetzt');
-  flash(req, 'success', 'Dein Passwort wurde geändert. Melde dich jetzt an.');
-  res.redirect('/login');
 });
 
 // ---------------------------------------------------------------------------
@@ -1339,9 +1109,9 @@ app.get('/admin/accounts', requireRoot, (req, res) => {
 
   const where = ["u.role != 'hrhr' OR u.id = ?"];
   const params = [req.user.id];
+  if (filter === 'user') where.push("u.role = 'user'");
   if (filter === 'hr') where.push("u.role = 'hr'");
   if (filter === 'disabled') where.push("u.status = 'disabled'");
-  if (filter === 'invited') where.push("u.status = 'invited'");
   if (filter === 'deleted') where.push("u.status = 'deleted'");
   if (search) {
     where.push('(u.username LIKE ? OR u.email LIKE ? OR u.discord_username LIKE ? OR u.global_name LIKE ?)');
@@ -1355,8 +1125,7 @@ app.get('/admin/accounts', requireRoot, (req, res) => {
     WHERE ${where.join(' AND ')}
     ORDER BY
       CASE u.role WHEN 'hrhr' THEN 0 ELSE 1 END,
-      CASE u.status WHEN 'active' THEN 0 WHEN 'invited' THEN 1 WHEN 'pending_password' THEN 1
-           WHEN 'pending_setup' THEN 1 WHEN 'disabled' THEN 2 ELSE 3 END,
+      CASE u.status WHEN 'active' THEN 0 WHEN 'disabled' THEN 1 ELSE 2 END,
       u.username ASC
   `).all(...params);
 
@@ -1370,9 +1139,8 @@ app.get('/admin/accounts', requireRoot, (req, res) => {
 
   const stats = {
     hr: db.prepare("SELECT COUNT(*) AS c FROM users WHERE role = 'hr' AND status != 'deleted'").get().c,
-    invited: db.prepare("SELECT COUNT(*) AS c FROM users WHERE status IN ('invited','pending_password','pending_setup')").get().c,
     disabled: db.prepare("SELECT COUNT(*) AS c FROM users WHERE status = 'disabled'").get().c,
-    total: db.prepare("SELECT COUNT(*) AS c FROM users WHERE role IN ('hr','hrhr') AND status != 'deleted'").get().c,
+    total: db.prepare("SELECT COUNT(*) AS c FROM users WHERE status != 'deleted'").get().c,
   };
 
   res.render('admin-accounts', {
@@ -1391,7 +1159,7 @@ app.get('/admin/logs', requireRoot, (req, res) => {
   const filter = req.query.filter || 'all';
   const where = [];
   const params = [];
-  if (filter === 'account') where.push("l.action IN ('invited','disabled','enabled','deleted','role_changed','activated','hrhr_created','password_reset')");
+  if (filter === 'account') where.push("l.action IN ('disabled','enabled','deleted','role_changed','activated','hrhr_created')");
   if (filter === 'ticket') where.push('l.action IN (SELECT DISTINCT action FROM ticket_logs)');
   const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
@@ -1420,43 +1188,9 @@ app.get('/admin/logs', requireRoot, (req, res) => {
   });
 });
 
-app.post('/admin/accounts/invite', requireRoot, async (req, res) => {
-  const email = String(req.body.email || '').trim().toLowerCase();
-  const discordUsername = String(req.body.discord_username || '').trim();
-
-  const errors = [];
-  if (!EMAIL_RE.test(email)) errors.push('Bitte gib eine gueltige E-Mail-Adresse an.');
-  if (!discordUsername) errors.push('Bitte gib den Discord-Username ein.');
-
-  if (!errors.length) {
-    const existingEmail = db.prepare('SELECT id FROM users WHERE LOWER(email) = ? AND status != \'deleted\'').get(email);
-    if (existingEmail) errors.push('Diese E-Mail-Adresse ist bereits vergeben.');
-  }
-  if (!errors.length) {
-    const existingDisc = db.prepare(`
-      SELECT id FROM users WHERE LOWER(discord_username) = LOWER(?) AND status != 'deleted'
-    `).get(discordUsername);
-    if (existingDisc) errors.push('Fuer diesen Discord-Username existiert bereits ein Konto.');
-  }
-
-  if (errors.length) {
-    flash(req, 'error', errors.join(' '));
-    return res.redirect('/admin/accounts');
-  }
-
-  const inviteToken = crypto.randomBytes(24).toString('hex');
-
-  const info = db.prepare(`
-    INSERT INTO users (username, discord_username, email, role, status, invite_token, created_at, updated_at)
-    VALUES (?, ?, ?, 'hr', 'invited', ?, datetime('now'), datetime('now'))
-  `).run(discordUsername, discordUsername, email, inviteToken);
-
-  await mailer.sendInvite(email, `${BASE_URL}/invite/${inviteToken}`);
-  logAccountAction(info.lastInsertRowid, req.user.id, 'invited', `Eingeladen als Team (${discordUsername}, ${email})`);
-
-  flash(req, 'success', `Einladung an ${email} gesendet.`);
-  res.redirect('/admin/accounts');
-});
+// Einladungen wurden komplett entfernt: Alle Konten entstehen per
+// Discord-Login. Der Inhaber vergibt die Rollen direkt hier in der
+// Account-Übersicht.
 
 app.post('/admin/accounts/:id/disable', requireRoot, (req, res) => {
   const target = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
@@ -1486,24 +1220,11 @@ app.post('/admin/accounts/:id/enable', requireRoot, async (req, res) => {
   if (!target || target.status !== 'disabled') return res.redirect('/admin/accounts');
 
   const reason = String(req.body.reason || '').trim();
-  const neverCompleted = !target.password_hash;
-
-  if (neverCompleted) {
-    // Einladung war noch nicht abgeschlossen -> erneut einladen (ohne OTP)
-    const inviteToken = crypto.randomBytes(24).toString('hex');
-    db.prepare(`
-      UPDATE users SET status = 'invited', invite_token = ?,
-          disabled_reason = NULL, disabled_at = NULL, disabled_by = NULL, updated_at = datetime('now')
-      WHERE id = ?
-    `).run(inviteToken, target.id);
-    await mailer.sendInvite(target.email, `${BASE_URL}/invite/${inviteToken}`);
-  } else {
-    db.prepare(`
-      UPDATE users SET status = 'active', disabled_reason = NULL, disabled_at = NULL, disabled_by = NULL,
-          updated_at = datetime('now')
-      WHERE id = ?
-    `).run(target.id);
-  }
+  db.prepare(`
+    UPDATE users SET status = 'active', disabled_reason = NULL, disabled_at = NULL, disabled_by = NULL,
+        updated_at = datetime('now')
+    WHERE id = ?
+  `).run(target.id);
 
   if (target.email) mailer.sendAccountReactivated(target.email, reason);
   logAccountAction(target.id, req.user.id, 'enabled', reason || 'Reaktiviert');
@@ -1537,11 +1258,11 @@ app.post('/admin/accounts/:id/delete', requireRoot, (req, res) => {
   res.redirect('/admin/accounts');
 });
 
-// Rolle ändern: nur Root-HR-HR. Promotion zum HR-HR geht nur, wenn der
-// Nutzer ein festgelegter Root (im Script autorisiert) ist – sonst Sperre.
+// Rolle ändern: nur Inhaber (Root). Nutzer/Team/Inhaber sind waehlbar;
+// Inhaber nur, wenn der Nutzer in der Konfiguration als Inhaber festgelegt ist.
 app.post('/admin/accounts/:id/role', requireRoot, async (req, res) => {
   const target = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
-  if (!target || target.status !== 'active' || target.id === req.user.id) {
+  if (!target || target.status === 'deleted' || target.id === req.user.id) {
     flash(req, 'error', 'Dieser Account kann nicht umgestellt werden.');
     return res.redirect('/admin/accounts');
   }
@@ -1557,7 +1278,7 @@ app.post('/admin/accounts/:id/role', requireRoot, async (req, res) => {
       return res.redirect('/admin/accounts');
     }
   }
-  if (!['hr', 'hrhr'].includes(role)) {
+  if (!['user', 'hr', 'hrhr'].includes(role)) {
     flash(req, 'error', 'Ungültige Rolle.');
     return res.redirect('/admin/accounts');
   }
@@ -1565,29 +1286,9 @@ app.post('/admin/accounts/:id/role', requireRoot, async (req, res) => {
   const oldRole = target.role;
   db.prepare("UPDATE users SET role = ?, is_root = CASE WHEN ? = 'hrhr' AND is_root = 0 THEN 1 ELSE is_root END, updated_at = datetime('now') WHERE id = ?")
     .run(role, role, target.id);
-  logAccountAction(target.id, req.user.id, 'role_changed', `Rolle: ${oldRole} → ${role}`);
+  logAccountAction(target.id, req.user.id, 'role_changed', `Rolle: ${ROLE_LABELS[oldRole] || oldRole} → ${ROLE_LABELS[role] || role}`);
 
-  flash(req, 'success', `Rolle von ${target.username} auf "${role === 'hrhr' ? 'Inhaber' : 'Team'}" geändert.`);
-  res.redirect('/admin/accounts');
-});
-
-// Passwort eines Accounts per Admin zuruecksetzen (Root-HR-HR)
-app.post('/admin/accounts/:id/reset-password', requireRoot, async (req, res) => {
-  const target = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
-  if (!target || !target.email || target.status === 'deleted') {
-    flash(req, 'error', 'Für diesen Account kann kein Passwort-Reset ausgelöst werden.');
-    return res.redirect('/admin/accounts');
-  }
-
-  const token = crypto.randomBytes(32).toString('hex');
-  const expires = new Date(Date.now() + 60 * 60 * 1000).toISOString();
-  db.prepare('UPDATE users SET reset_token = ?, reset_expires = ? WHERE id = ?')
-    .run(token, expires, target.id);
-
-  await mailer.sendPasswordReset(target.email, `${BASE_URL}/reset-password?token=${token}`);
-  logAccountAction(target.id, req.user.id, 'password_reset', 'Passwort-Reset per Admin ausgelöst');
-
-  flash(req, 'success', `Passwort-Reset-E-Mail an ${target.email} gesendet.`);
+  flash(req, 'success', `Rolle von ${target.username} auf "${ROLE_LABELS[role]}" geändert.`);
   res.redirect('/admin/accounts');
 });
 

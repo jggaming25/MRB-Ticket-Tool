@@ -57,6 +57,7 @@ db.exec(`
     reset_token       TEXT,
     reset_expires     TEXT,
     pending_email     TEXT,
+    notify_changes    INTEGER NOT NULL DEFAULT 0,
     disabled_reason   TEXT,
     disabled_at       TEXT,
     disabled_by       INTEGER,
@@ -187,6 +188,7 @@ function migrateUsers() {
   add('is_root', 'INTEGER NOT NULL DEFAULT 0');
   add('reset_token', 'TEXT');
   add('reset_expires', 'TEXT');
+  add('notify_changes', 'INTEGER NOT NULL DEFAULT 0');
   // Altes is_staff-Flag auf neue Rollen abbilden
   if (cols.includes('is_staff') && !cols.includes('role')) {
     db.exec("UPDATE users SET role = 'hr' WHERE is_staff = 1");

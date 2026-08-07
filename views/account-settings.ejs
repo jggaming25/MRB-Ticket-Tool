@@ -1,0 +1,60 @@
+<%- include('partials/head', { title, user, isHR, isHRHR, currentPath }) %>
+
+  <div class="page-head">
+    <div>
+      <h1>Kontoeinstellungen</h1>
+      <p class="muted">Dein Konto ist mit deinem Discord-Account verbunden. Die E-Mail-Adresse wird aus Discord übernommen und kann hier nicht geändert werden.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Benachrichtigungen</h2>
+    <p class="muted">Lass dich benachrichtigen, wenn sich an deinen Tickets etwas ändert (z. B. neue Nachrichten oder Statusänderungen). Die Hinweise erscheinen als Desktop-Benachrichtigung, solange diese Website im Browser geöffnet ist.</p>
+
+    <form method="post" action="/account/settings" class="notify-form">
+      <label class="checkbox-row">
+        <input type="checkbox" name="notify_changes" value="1" <%= user.notify_changes === 1 ? 'checked' : '' %>>
+        <span>
+          <strong>Bei Ticketänderungen benachrichtigen</strong>
+          <span class="hint">Nutzer: Änderungen an deinen eigenen Tickets. Team/Inhaber: Änderungen an allen Tickets.</span>
+        </span>
+      </label>
+      <button type="submit" class="btn btn-primary">Einstellungen speichern</button>
+    </form>
+
+    <p class="hint" style="margin-top:16px;">
+      Desktop-Benachrichtigungen müssen zusätzlich vom Browser erlaubt werden:
+      <button type="button" class="btn btn-sm btn-secondary" id="enable-notifications">Benachrichtigungen im Browser aktivieren</button>
+      <span id="notify-permission" class="hint"></span>
+    </p>
+  </div>
+
+  <div class="card">
+    <h2>Account</h2>
+    <table class="table">
+      <tbody>
+        <tr>
+          <td class="small">Discord-Name</td>
+          <td><strong><%= user.global_name || user.username %></strong> (@<%= user.discord_username %>)</td>
+        </tr>
+        <tr>
+          <td class="small">E-Mail</td>
+          <td><%= user.email || 'Keine E-Mail-Adresse hinterlegt (in Discord hinterlegen)' %></td>
+        </tr>
+        <tr>
+          <td class="small">Rolle</td>
+          <td><%= roleLabels[user.role] || user.role %></td>
+        </tr>
+        <tr>
+          <td class="small">Registriert</td>
+          <td><%= fmtDate(user.created_at) %></td>
+        </tr>
+        <tr>
+          <td class="small">Letzter Login</td>
+          <td><%= fmtDate(user.last_login) %></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+<%- include('partials/footer') %>

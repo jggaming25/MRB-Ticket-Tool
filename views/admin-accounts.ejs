@@ -3,7 +3,7 @@
   <div class="page-head">
     <div>
       <h1>Team-Verwaltung</h1>
-      <p class="muted">Nur für festgelegte Inhaber (aus der Konfiguration). Team-Accounts einladen, verwalten und den aktuellen Stand aller Konten sehen.</p>
+      <p class="muted">Hier vergibst du Rollen für alle Konten, die sich bereits angemeldet haben. Nur Inhaber können Team-Accounts ändern oder löschen.</p>
     </div>
     <div class="btn-group">
       <a class="btn btn-ghost" href="/admin/logs">Audit-Log</a>
@@ -14,15 +14,11 @@
   <div class="stat-grid">
     <div class="stat-card">
       <span class="stat-value"><%= stats.total %></span>
-      <span class="stat-label">Team / Inhaber Accounts</span>
+      <span class="stat-label">Konten gesamt</span>
     </div>
     <div class="stat-card">
       <span class="stat-value"><%= stats.hr %></span>
       <span class="stat-label">Team aktiv</span>
-    </div>
-    <div class="stat-card">
-      <span class="stat-value"><%= stats.invited %></span>
-      <span class="stat-label">Ausstehende Einladungen</span>
     </div>
     <div class="stat-card">
       <span class="stat-value"><%= stats.disabled %></span>
@@ -31,32 +27,13 @@
   </div>
 
   <div class="card">
-    <h2>Team-Account einladen</h2>
-    <p class="muted">Der Eingeladene erhält eine E-Mail mit Einladungslink. Nach dem Discord-Login
-    legt er nur noch sein eigenes Passwort fest.</p>
-    <form method="post" action="/admin/accounts/invite" class="filter-form">
-      <div class="form-group grow">
-        <label for="inv-email">E-Mail-Adresse *</label>
-        <input type="email" id="inv-email" name="email" required placeholder="max@beispiel.de">
-      </div>
-      <div class="form-group grow">
-        <label for="inv-discord">Discord-Username *</label>
-        <input type="text" id="inv-discord" name="discord_username" required placeholder="max.mustermann">
-      </div>
-      <div class="form-group">
-        <button type="submit" class="btn btn-primary">Einladung senden</button>
-      </div>
-    </form>
-  </div>
-
-  <div class="card">
     <form method="get" action="/admin/accounts" class="filter-form">
       <div class="form-group">
         <label for="filter">Status</label>
         <select name="filter" id="filter">
           <option value="all" <%= filter === 'all' ? 'selected' : '' %>>Alle</option>
+          <option value="user" <%= filter === 'user' ? 'selected' : '' %>>Nutzer</option>
           <option value="hr" <%= filter === 'hr' ? 'selected' : '' %>>Nur Team</option>
-          <option value="invited" <%= filter === 'invited' ? 'selected' : '' %>>Eingeladen</option>
           <option value="disabled" <%= filter === 'disabled' ? 'selected' : '' %>>Deaktiviert</option>
           <option value="deleted" <%= filter === 'deleted' ? 'selected' : '' %>>Gelöscht</option>
         </select>
@@ -74,7 +51,7 @@
 
   <div class="card">
     <% if (users.length === 0) { %>
-      <p class="muted">Keine Accounts gefunden.</p>
+      <p class="muted">Keine Accounts gefunden. Sobald sich jemand mit Discord anmeldet, taucht er hier auf.</p>
     <% } else { %>
       <table class="table">
         <thead>
@@ -103,7 +80,7 @@
                 </div>
               </td>
               <td class="small"><%= u.email || '–' %></td>
-              <td><span class="tag <%= u.role === 'hrhr' ? 'role-hrhr' : 'role-hr' %>"><%= roleLabels[u.role] || u.role %></span></td>
+              <td><span class="tag <%= u.role === 'hrhr' ? 'role-hrhr' : (u.role === 'hr' ? 'role-hr' : 'role-user') %>"><%= roleLabels[u.role] || u.role %></span></td>
               <td><span class="tag acc-<%= u.status %>"><%= accountStatusLabel(u.status) %></span></td>
               <td><%= u.ticket_count %></td>
               <td class="muted small"><%= fmtDate(u.created_at) %></td>
@@ -113,22 +90,16 @@
                   <details class="acc-actions">
                     <summary class="btn btn-sm btn-ghost">Aktionen ▾</summary>
                     <div class="acc-actions-body">
-                      <% if (u.role === 'hr' || u.role === 'hrhr') { %>
-                        <form method="post" action="/admin/accounts/<%= u.id %>/role">
-                          <label class="small">Rolle ändern</label>
-                          <select name="role" class="input">
-                            <option value="hr" <%= u.role === 'hr' ? 'selected' : '' %>>Team</option>
-                            <option value="hrhr" <%= u.role === 'hrhr' ? 'selected' : '' %>>Inhaber</option>
-                          </select>
-                          <button type="submit" class="btn btn-sm btn-primary">Rolle setzen</button>
-                          <p class="hint">Inhaber nur möglich, wenn der Nutzer in <code>.env</code> als AUTHORIZED_DISCORD_USERNAMES festgelegt ist.</p>
-                        </form>
-                      <% } %>
-                      <% if (u.email) { %>
-                        <form method="post" action="/admin/accounts/<%= u.id %>/reset-password">
-                          <button type="submit" class="btn btn-sm btn-secondary">Passwort-Reset-Mail senden</button>
-                        </form>
-                      <% } %>
+                      <form method="post" action="/admin/accounts/<%= u.id %>/role">
+                        <label class="small">Rolle festlegen</label>
+                        <select name="role" class="input">
+                          <option value="user" <%= u.role === 'user' ? 'selected' : '' %>>Nutzer</option>
+                          <option value="hr" <%= u.role === 'hr' ? 'selected' : '' %>>Team</option>
+                          <option value="hrhr" <%= u.role === 'hrhr' ? 'selected' : '' %>>Inhaber</option>
+                        </select>
+                        <button type="submit" class="btn btn-sm btn-primary">Rolle setzen</button>
+                        <p class="hint">Inhaber nur möglich, wenn der Nutzer in <code>.env</code> als AUTHORIZED_DISCORD_USERNAMES festgelegt ist.</p>
+                      </form>
                       <% if (u.status === 'disabled') { %>
                         <form method="post" action="/admin/accounts/<%= u.id %>/enable">
                           <label class="small">Grund (optional)</label>

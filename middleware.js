@@ -6,9 +6,6 @@ const config = require('./config');
 const ROLE_LABELS = { user: 'Nutzer', hr: 'Team', hrhr: 'Inhaber' };
 const STATUS_LABELS = {
   active: 'Aktiv',
-  invited: 'Eingeladen',
-  pending_password: 'Passwort ausstehend',
-  pending_setup: 'Setup ausstehend',
   disabled: 'Deaktiviert',
   deleted: 'Gelöscht',
 };
@@ -110,30 +107,25 @@ function requireRoot(req, res, next) {
   next();
 }
 
-// Nutzer, die ihren Onboarding-Prozess noch nicht abgeschlossen haben,
-// werden zur jeweiligen Seite weitergeleitet.
+// Es gibt kein Onboarding mehr (keine Einladungen, kein Passwort-Setup):
+// Jeder Account ist direkt nach dem Discord-Login aktiv. Einzige Sperre ist
+// die Konto-Deaktivierung/-Loeschung durch den Inhaber.
 function onboardingGuard(req, res, next) {
   if (!req.user) return next();
-  if (req.path.startsWith('/onboard') || req.path.startsWith('/auth') || req.path === '/logout') {
+  if (req.path.startsWith('/auth') || req.path === '/logout') {
     return next();
   }
   // Statische Dateien (CSS/JS/Bilder) und Datei-Downloads muessen immer
   // durchgelassen werden, sonst leitet der Guard z. B. /static/css/style.css
-  // auf /onboard/setup um und der Browser verwirft das HTML als Stylesheet.
+  // auf /login um und der Browser verwirft das HTML als Stylesheet.
   if (req.path.startsWith('/static/') || req.path.startsWith('/file/') || req.path === '/healthz') {
     return next();
   }
-  switch (req.user.status) {
-    case 'invited':
-    case 'pending_password': return res.redirect('/onboard/password');
-    case 'pending_setup': return res.redirect('/onboard/setup');
-    case 'disabled':
-    case 'deleted':
-      req.session.destroy(() => {});
-      return res.redirect('/login');
-    default:
-      return next();
+  if (req.user.status === 'disabled' || req.user.status === 'deleted') {
+    req.session.destroy(() => {});
+    return res.redirect('/login');
   }
+  return next();
 }
 
 function categories() {
