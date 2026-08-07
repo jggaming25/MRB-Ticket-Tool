@@ -180,6 +180,7 @@ function migrateUsers() {
   add('invite_token', 'TEXT');
   add('verify_token', 'TEXT');
   add('pending_email', 'TEXT');
+  add('last_mail_sent_at', 'TEXT');
   add('disabled_reason', 'TEXT');
   add('disabled_at', 'TEXT');
   add('disabled_by', 'INTEGER');
