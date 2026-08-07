@@ -42,6 +42,13 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
 
+// Cache-Busting: Versionsnummer anhand der letzten Änderung der CSS-Datei.
+// Dadurch wird ein veraltetes Browser-Cache der style.css vermieden.
+let assetVersion = 1;
+try {
+  assetVersion = fs.statSync(path.join(__dirname, 'public', 'css', 'style.css')).mtimeMs;
+} catch { /* Datei existiert nicht -> Version bleibt 1 */ }
+
 // ---------------------------------------------------------------------------
 // Globale Einstellungen
 // ---------------------------------------------------------------------------
@@ -83,6 +90,7 @@ app.use((req, res, next) => {
 // Globale Template-Variablen
 app.use((req, res, next) => {
   res.locals.baseUrl = BASE_URL;
+  res.locals.assetVersion = assetVersion;
   res.locals.currentPath = req.path;
   res.locals.priorityLabel = priorityLabel;
   res.locals.statusLabel = statusLabel;
