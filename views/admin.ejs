@@ -101,11 +101,11 @@
         <tbody>
           <% tickets.forEach((t) => { %>
             <% const tOd = isOverdue(t); %>
-            <tr class="clickable <%= tOd ? 'row-overdue' : '' %>" onclick="window.location='/tickets/<%= t.id %>'">
+            <tr class="clickable <%= tOd ? 'row-overdue' : '' %>" data-ticket-id="<%= t.id %>">
               <td class="mono">#<%= String(t.number).padStart(4, '0') %></td>
               <td class="td-subject"><%= t.subject %></td>
               <td>
-                <% if (t.owner_avatar) { %><img class="mini-avatar" src="https://cdn.discordapp.com/avatars/<%= t.owner_discord_id %>/<%= t.owner_avatar %>.png?size=64" onerror="this.style.display='none'"><% } %>
+                <% if (t.owner_avatar) { %><img class="mini-avatar" src="https://cdn.discordapp.com/avatars/<%= t.owner_discord_id %>/<%= t.owner_avatar %>.png?size=64" data-hide-on-error><% } %>
                 <%= t.owner_global_name || t.owner_username %>
               </td>
               <td><span class="tag tag-cat"><%= t.category %></span></td>

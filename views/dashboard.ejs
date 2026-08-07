@@ -59,7 +59,7 @@
         <tbody>
           <% myTickets.forEach((t) => { %>
             <% const od = isOverdue(t); %>
-            <tr class="clickable <%= od ? 'row-overdue' : '' %>" onclick="window.location='/tickets/<%= t.id %>'">
+            <tr class="clickable <%= od ? 'row-overdue' : '' %>" data-ticket-id="<%= t.id %>">
               <td class="mono">#<%= String(t.number).padStart(4, '0') %></td>
               <td class="td-subject"><%= t.subject %></td>
               <td><span class="tag tag-cat"><%= t.category %></span></td>

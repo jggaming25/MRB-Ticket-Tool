@@ -25,6 +25,28 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
+  // Bestätigungsdialog für Formulare (data-confirm)
+  document.querySelectorAll('form[data-confirm]').forEach((form) => {
+    form.addEventListener('submit', (e) => {
+      if (!window.confirm(form.dataset.confirm)) e.preventDefault();
+    });
+  });
+
+  // Klickbare Ticket-Zeilen (data-ticket-id)
+  document.querySelectorAll('.clickable[data-ticket-id]').forEach((row) => {
+    row.addEventListener('click', () => {
+      window.location.href = '/tickets/' + row.dataset.ticketId;
+    });
+  });
+
+  // Avatar-Fallback (data-fallback) / verstecken bei Fehler (data-hide-on-error)
+  document.querySelectorAll('img[data-fallback]').forEach((img) => {
+    img.addEventListener('error', () => { img.src = img.dataset.fallback; });
+  });
+  document.querySelectorAll('img[data-hide-on-error]').forEach((img) => {
+    img.addEventListener('error', () => { img.style.display = 'none'; });
+  });
+
   // Aufklappbare Panels (z. B. "Freigabe zur Schließung")
   document.querySelectorAll('[data-open]').forEach((trigger) => {
     trigger.addEventListener('click', () => {

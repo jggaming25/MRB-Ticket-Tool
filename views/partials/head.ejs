@@ -42,7 +42,7 @@
           <% } %>
         </nav>
         <div class="user-chip">
-          <img class="avatar" src="<%= user.avatar ? 'https://cdn.discordapp.com/avatars/' + user.discord_id + '/' + user.avatar + '.png?size=64' : '/static/img/placeholder.svg' %>" alt="" onerror="this.src='/static/img/placeholder.svg'">
+          <img class="avatar" src="<%= user.avatar ? 'https://cdn.discordapp.com/avatars/' + user.discord_id + '/' + user.avatar + '.png?size=64' : '/static/img/placeholder.svg' %>" alt="" data-fallback="/static/img/placeholder.svg">
           <span class="user-name"><%= user.global_name || user.username %>
             <% if (user.role === 'hrhr') { %><span class="badge badge-hrhr">Inhaber</span><% } else if (user.role === 'hr') { %><span class="badge badge-hr">Team</span><% } %>
           </span>

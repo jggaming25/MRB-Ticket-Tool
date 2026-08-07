@@ -27,13 +27,13 @@
       <% } %>
       <% if (canClose) { %>
         <form method="post" action="/tickets/<%= ticket.id %>/close" class="inline-form"
-              onsubmit="return confirm('Ticket wirklich schließen? Nur Inhaber kann das rückgängig machen.');">
+              data-confirm="Ticket wirklich schließen? Nur Inhaber kann das rückgängig machen.">
           <button type="submit" class="btn btn-danger">Ticket schließen</button>
         </form>
       <% } %>
       <% if (canReopen) { %>
         <form method="post" action="/tickets/<%= ticket.id %>/reopen" class="inline-form"
-              onsubmit="return confirm('Ticket wieder öffnen?');">
+              data-confirm="Ticket wieder öffnen?">
           <button type="submit" class="btn btn-primary">Wieder öffnen</button>
         </form>
       <% } %>
@@ -87,7 +87,7 @@
           <% const mine = m.user_id === user.id; %>
           <div class="msg <%= m.is_system ? 'msg-system' : (mine ? 'msg-mine' : 'msg-other') %>" id="msg-<%= m.id %>">
             <% if (!m.is_system) { %>
-              <img class="msg-avatar" src="<%= m.avatar ? 'https://cdn.discordapp.com/avatars/' + m.discord_id + '/' + m.avatar + '.png?size=64' : '/static/img/placeholder.svg' %>" alt="" onerror="this.src='/static/img/placeholder.svg'">
+              <img class="msg-avatar" src="<%= m.avatar ? 'https://cdn.discordapp.com/avatars/' + m.discord_id + '/' + m.avatar + '.png?size=64' : '/static/img/placeholder.svg' %>" alt="" data-fallback="/static/img/placeholder.svg">
             <% } %>
             <div class="msg-body">
               <% if (!m.is_system) { %>
@@ -197,7 +197,8 @@
         <% if (ticket.status !== 'closed' && staffUsers.length > 0) { %>
           <div class="card">
             <h3>Ticket übergeben</h3>
-            <form method="post" action="/admin/tickets/<%= ticket.id %>/transfer">
+            <form method="post" action="/admin/tickets/<%= ticket.id %>/transfer" id="transfer-form"
+                  data-confirm="Ticket wirklich übergeben?">
               <div class="form-group">
                 <label for="transfer-assignee">Neuer Bearbeiter</label>
                 <select class="input" id="transfer-assignee" name="assignee" required>
@@ -211,7 +212,7 @@
                 <label for="transfer-reason">Begründung</label>
                 <textarea class="input" id="transfer-reason" name="reason" rows="3" required placeholder="Warum übergibst du das Ticket?"></textarea>
               </div>
-              <button type="submit" class="btn btn-secondary btn-sm" onclick="return confirm('Ticket wirklich übergeben?')">Übergeben</button>
+              <button type="submit" class="btn btn-secondary btn-sm" form="transfer-form">Übergeben</button>
             </form>
           </div>
         <% } %>

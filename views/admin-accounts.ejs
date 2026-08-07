@@ -71,7 +71,7 @@
             <tr class="<%= u.id === myId ? 'row-me' : '' %>">
               <td>
                 <div class="user-cell">
-                  <img class="avatar" src="<%= u.avatar ? 'https://cdn.discordapp.com/avatars/' + u.discord_id + '/' + u.avatar + '.png?size=64' : '/static/img/placeholder.svg' %>" onerror="this.src='/static/img/placeholder.svg'">
+                  <img class="avatar" src="<%= u.avatar ? 'https://cdn.discordapp.com/avatars/' + u.discord_id + '/' + u.avatar + '.png?size=64' : '/static/img/placeholder.svg' %>" data-fallback="/static/img/placeholder.svg">
                   <div>
                     <strong><%= u.global_name || u.username %></strong>
                     <% if (u.id === myId) { %><span class="badge">Du</span><% } %>
@@ -115,7 +115,7 @@
                       <% } %>
                       <% if (u.role !== 'hrhr') { %>
                         <form method="post" action="/admin/accounts/<%= u.id %>/delete"
-                              onsubmit="return confirm('Konto wirklich löschen? Diese Aktion wird dem Nutzer per E-Mail mitgeteilt.');">
+                              data-confirm="Konto wirklich löschen? Diese Aktion wird dem Nutzer per E-Mail mitgeteilt.">
                           <label class="small">Begründung *</label>
                           <input type="text" name="reason" required placeholder="Warum löschen?">
                           <button type="submit" class="btn btn-sm btn-danger">Löschen</button>
