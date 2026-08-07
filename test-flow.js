@@ -22,6 +22,14 @@ process.env.BASE_URL = 'http://localhost:3000';
 // Test in die Produktionsdatenbank schreiben, statt in die lokale data-test/.
 delete process.env.TURSO_URL;
 delete process.env.TURSO_AUTH_TOKEN;
+// Ebenso SMTP deaktivieren – Mails landen im Ordner mail-log/, statt wirklich
+// ueber Brevo versendet zu werden (sonst sendet der Test echte Mails).
+delete process.env.SMTP_HOST;
+delete process.env.SMTP_USER;
+delete process.env.SMTP_PASS;
+delete process.env.SMTP_PORT;
+delete process.env.SMTP_SECURE;
+delete process.env.MAIL_FROM;
 // Guild-Prüfung bleibt hier aus (DISCORD_GUILD_ID nicht gesetzt),
 // damit der komplette Flow ohne echten Server durchlaeuft.
 

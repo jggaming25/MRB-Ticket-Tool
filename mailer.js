@@ -8,7 +8,9 @@ const MAIL_FROM = process.env.MAIL_FROM || 'TicketSystem MRB <noreply@localhost>
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3000';
 
 let transporter = null;
-if (process.env.SMTP_HOST && process.env.SMTP_USER) {
+// Im Testmodus (NODE_ENV='test') nie SMTP nutzen – auch wenn SMTP_HOST in
+// der .env steht. Mails landen dann im mail-log/, statt echte Mails zu senden.
+if (process.env.NODE_ENV !== 'test' && process.env.SMTP_HOST && process.env.SMTP_USER) {
   transporter = nodemailer.createTransport({
     host: process.env.SMTP_HOST,
     port: Number(process.env.SMTP_PORT || 587),
@@ -17,16 +19,18 @@ if (process.env.SMTP_HOST && process.env.SMTP_USER) {
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASS || '',
     },
-    connectionTimeout: 15000,
-    greetingTimeout: 15000,
-    socketTimeout: 20000,
+    connectionTimeout: 30000,
+    greetingTimeout: 30000,
+    socketTimeout: 40000,
   });
 }
 
 // Sicherheitsnetz: Sollte nodemailer den SMTP-Vorgang trotz Timeouts nicht
 // abschließen (z. B. weil der Server gar nicht antwortet), den Vorgang nach
-// 25 Sekunden abbrechen statt den Request ewig hängen zu lassen.
-const SEND_TIMEOUT_MS = 25000;
+// 45 Sekunden abbrechen statt den Request ewig hängen zu lassen.
+// (45s, damit auch Render-Free-Instanzen nach dem Aufwachen aus dem
+// Schlafmodus genug Zeit für den SMTP-Versand haben.)
+const SEND_TIMEOUT_MS = 45000;
 function withSendTimeout(promise) {
   return new Promise((resolve) => {
     let settled = false;

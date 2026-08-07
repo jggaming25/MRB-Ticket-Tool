@@ -188,6 +188,23 @@ function genOtp() {
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+// Verifizierungscode erzeugen, speichern und per E-Mail versenden.
+// last_mail_sent_at wird NUR bei erfolgreichem Versand gesetzt, damit der
+// User bei einem SMTP-Fehler sofort erneut versuchen kann (kein 60s-Warten).
+async function sendVerifyCode(userId, email) {
+  const code = genOtp();
+  const codeHash = await bcrypt.hash(code, 10);
+  const ok = await mailer.sendVerificationCode(email, code);
+  if (ok) {
+    db.prepare(`
+      UPDATE users
+      SET verify_token = ?, last_mail_sent_at = datetime('now'), updated_at = datetime('now')
+      WHERE id = ?
+    `).run(codeHash, userId);
+  }
+  return ok;
+}
+
 async function sendOtpEmail(user) {
   const otp = genOtp();
   const otpHash = await bcrypt.hash(otp, 10);
@@ -567,15 +584,31 @@ app.post('/onboard/setup', requireLogin, async (req, res) => {
   `).run(email, passwordHash, codeHash, req.user.id);
 
   await mailer.sendVerificationCode(email, code);
+  db.prepare(`
+    UPDATE users
+    SET last_mail_sent_at = datetime('now'), updated_at = datetime('now')
+    WHERE id = ?
+  `).run(req.user.id);
   flash(req, 'success', 'Ein Verifizierungscode wurde an deine E-Mail-Adresse gesendet.');
   res.redirect('/onboard/verify');
 });
 
-app.get('/onboard/verify', requireLogin, (req, res) => {
+// Verify-Seite: Beim ersten Aufruf (wenn noch kein Code versendet wurde)
+// den Code automatisch generieren und versenden.
+app.get('/onboard/verify', requireLogin, async (req, res) => {
   if (req.user.status !== 'pending_email') return res.redirect('/');
+
+  const needsSend = !req.user.last_mail_sent_at;
+  let sendError = false;
+  if (needsSend) {
+    sendError = !(await sendVerifyCode(req.user.id, req.user.pending_email));
+  }
+
+  const user = db.prepare('SELECT last_mail_sent_at FROM users WHERE id = ?').get(req.user.id);
   res.render('onboard-verify', {
     title: 'E-Mail verifizieren',
-    sentAt: req.user.last_mail_sent_at || null,
+    sentAt: user.last_mail_sent_at || null,
+    error: sendError ? 'Der Code konnte gerade nicht versendet werden. Bitte versuche es in einer Minute erneut.' : null,
   });
 });
 
@@ -589,22 +622,16 @@ app.post('/onboard/verify/resend', requireLogin, async (req, res) => {
   if (lastSent && (Date.now() - new Date(lastSent).getTime()) < 60 * 1000) {
     return res.status(429).render('onboard-verify', {
       title: 'E-Mail verifizieren',
-      error: 'Bitte warte kurz, bevor du den Code erneut anfordern.',
+      sentAt: lastSent,
+      error: 'Bitte warte kurz, bevor du den Code erneut anforderst.',
     });
   }
 
-  const code = genOtp();
-  const codeHash = await bcrypt.hash(code, 10);
-  db.prepare(`
-    UPDATE users
-    SET verify_token = ?, last_mail_sent_at = datetime('now'), updated_at = datetime('now')
-    WHERE id = ?
-  `).run(codeHash, req.user.id);
-
-  const mailOk = await mailer.sendVerificationCode(req.user.pending_email, code);
+  const mailOk = await sendVerifyCode(req.user.id, req.user.pending_email);
   if (!mailOk) {
     return res.status(502).render('onboard-verify', {
       title: 'E-Mail verifizieren',
+      sentAt: req.user.last_mail_sent_at || null,
       error: 'Der Code konnte gerade nicht versendet werden. Bitte versuche es in einer Minute erneut.',
     });
   }
