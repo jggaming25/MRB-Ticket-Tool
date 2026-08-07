@@ -118,6 +118,12 @@ function onboardingGuard(req, res, next) {
   if (req.path.startsWith('/onboard') || req.path.startsWith('/auth') || req.path === '/logout') {
     return next();
   }
+  // Statische Dateien (CSS/JS/Bilder) und Datei-Downloads muessen immer
+  // durchgelassen werden, sonst leitet der Guard z. B. /static/css/style.css
+  // auf /onboard/setup um und der Browser verwirft das HTML als Stylesheet.
+  if (req.path.startsWith('/static/') || req.path.startsWith('/file/') || req.path === '/healthz') {
+    return next();
+  }
   switch (req.user.status) {
     case 'invited': return res.redirect('/onboard/otp');
     case 'pending_password': return res.redirect('/onboard/password');
