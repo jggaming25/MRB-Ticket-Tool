@@ -10,7 +10,7 @@
         <a class="btn btn-ghost" href="/tickets/new">Neues Ticket</a>
       <% } else { %>
         <a class="btn btn-primary" href="/login">Jetzt einloggen (Discord)</a>
-        <p class="hint">Nach dem Login siehst du hier alle internen Bereiche und Links.</p>
+        <p class="hint">Nach dem Login siehst du hier alle internen Bereiche und Links – wenn du auf Discord deine Rolle bereits erhalten hast. Sonst siehst du nur deine Tickets.</p>
       <% } %>
     </div>
   </div>
@@ -77,7 +77,7 @@
           <p class="muted">Alle Konto- und Ticket-Aktionen.</p>
         </a>
       <% } %>
-      <% if (config.staffLinks && config.staffLinks.length) { %>
+      <% if (canStaffLinks && config.staffLinks && config.staffLinks.length) { %>
         <% config.staffLinks.forEach((l) => { %>
           <a class="tool-card card" href="<%= l.url %>" target="_blank" rel="noopener noreferrer">
             <div class="tool-emoji">🔗</div>

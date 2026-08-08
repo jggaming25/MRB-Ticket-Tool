@@ -380,6 +380,11 @@ app.get('/auth/callback', authLimiter, async (req, res) => {
       ? dUser.email.trim().toLowerCase()
       : null;
 
+    // Discord-Rollen des Nutzers auf dem Server abrufen (bestimmt den Zugriff
+    // auf "Interne Links"). Ohne konfigurierte Guild-ID bleibt die Liste leer.
+    const guildRoles = await discord.fetchGuildRoles(token.access_token);
+    const guildRolesStr = guildRoles.length ? guildRoles.join(',') : null;
+
     // Der Inhaber (aus AUTHORIZED_DISCORD_USERNAMES) braucht zwingend eine
     // verifizierte E-Mail, sonst wird der Login blockiert (Anweisung:
     // hinterlege in Discord eine E-Mail-Adresse). Normale Nutzer duerfen
@@ -398,10 +403,10 @@ app.get('/auth/callback', authLimiter, async (req, res) => {
       // Beide sind sofort aktiv – es gibt kein Setup und kein Passwort mehr.
       const isOwner = discord.isAuthorizedDiscord(dUser);
       const info = db.prepare(`
-        INSERT INTO users (discord_id, discord_username, username, global_name, avatar, email, role, status, is_root, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, datetime('now'), datetime('now'))
+        INSERT INTO users (discord_id, discord_username, username, global_name, avatar, email, role, status, is_root, discord_roles, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, datetime('now'), datetime('now'))
       `).run(dUser.id, dUser.username, dUser.global_name || dUser.username, dUser.global_name || null,
-        dUser.avatar || null, discordEmail, isOwner ? 'hrhr' : 'user', isOwner ? 1 : 0);
+        dUser.avatar || null, discordEmail, isOwner ? 'hrhr' : 'user', isOwner ? 1 : 0, guildRolesStr);
       user = db.prepare('SELECT * FROM users WHERE id = ?').get(info.lastInsertRowid);
       if (isOwner) {
         logAccountAction(user.id, user.id, 'hrhr_created', 'Inhaber-Account per Discord-Registrierung angelegt');
@@ -436,10 +441,10 @@ app.get('/auth/callback', authLimiter, async (req, res) => {
         UPDATE users
         SET username = ?, global_name = ?, avatar = ?, discord_username = ?,
             email = CASE WHEN ? IS NOT NULL AND (email IS NULL OR email = '') THEN ? ELSE email END,
-            last_login = datetime('now'), updated_at = datetime('now')
+            discord_roles = ?, last_login = datetime('now'), updated_at = datetime('now')
         WHERE id = ?
       `).run(dUser.global_name || dUser.username, dUser.global_name || null, dUser.avatar || null,
-        dUser.username, discordEmail, discordEmail, user.id);
+        dUser.username, discordEmail, discordEmail, guildRolesStr, user.id);
       user = db.prepare('SELECT * FROM users WHERE id = ?').get(user.id);
     }
 

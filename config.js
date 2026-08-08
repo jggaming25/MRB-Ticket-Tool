@@ -62,6 +62,33 @@ module.exports = {
   ],
 
   // ---------------------------------------------------------------------------
+  // Discord-Rollen mit Zugriff auf "Interne Links" / interne Bereiche.
+  // Nutzer, deren Discord-Konto eine dieser Rollen auf dem Server hat
+  // (DISCORD_GUILD_ID in .env), sehen nach dem Login den Tab "Interne Links".
+  // Nutzer ohne diese Rollen sehen nur ihre Tickets. Du findest die Rollen-ID
+  // in Discord: Server-Einstellungen -> Rollen -> Rolle -> "…" -> ID kopieren
+  // (Entwicklermodus aktivieren unter Einstellungen -> Erweitert).
+  // ---------------------------------------------------------------------------
+  staffDiscordRoleIds: [
+    '1497926771872366644',
+    '1450856112101396623',
+    '1450563150939160646',
+    '1450856176987148390',
+    '1450856244897386619',
+    '1450856362014937188',
+    '1450563071100584010',
+    '1446162014991814788',
+    '1446161959916667041',
+    '1531039189179564223',
+    '1531037872038088794',
+    '1531038796576063618',
+    '1450856053364363405',
+    '1535379321659723877',
+    '1446161791385337958',
+    '1446161872519958703',
+  ],
+
+  // ---------------------------------------------------------------------------
   // Tickets
   // ---------------------------------------------------------------------------
   // Kategorien, die der Ticket-Eroeffner beim Erstellen auswaehlen kann.

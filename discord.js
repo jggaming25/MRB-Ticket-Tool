@@ -30,11 +30,13 @@ function getAuthUrl() {
   const state = generateState();
   // "guilds" ist nötig, um zu prüfen, ob sich der Nutzer auf unserem
   // Discord-Server befindet (DISCORD_GUILD_ID in .env).
+  // "guilds.members.read" erlaubt das Abrufen der Rollen des Nutzers auf dem
+  // Server – damit kann gesteuert werden, wer den Tab "Interne Links" sieht.
   const params = new URLSearchParams({
     client_id: CLIENT_ID,
     redirect_uri: REDIRECT_URI,
     response_type: 'code',
-    scope: 'identify email guilds',
+    scope: 'identify email guilds guilds.members.read',
     state,
   });
   return { url: `https://discord.com/api/oauth2/authorize?${params}`, state };
@@ -55,6 +57,23 @@ async function isInGuild(accessToken, guildId = GUILD_ID) {
   if (!res.ok) throw new Error(`Discord guilds fetch failed (${res.status})`);
   const guilds = await res.json();
   return Array.isArray(guilds) && guilds.some((g) => String(g.id) === String(guildId));
+}
+
+// Rollen-IDs des Nutzers auf dem konfigurierten Server (leeres Array, wenn
+// keine Guild konfiguriert oder der Abruf fehlschlaegt).
+async function fetchGuildRoles(accessToken, guildId = GUILD_ID) {
+  if (!guildId) return [];
+  try {
+    const res = await fetch(`${DISCORD_API}/users/@me/guilds/${guildId}/member`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    if (!res.ok) return [];
+    const member = await res.json();
+    return Array.isArray(member.roles) ? member.roles : [];
+  } catch (err) {
+    console.error('Discord-Rollen-Abruf fehlgeschlagen:', err.message);
+    return [];
+  }
 }
 
 async function exchangeCode(code) {
@@ -144,6 +163,7 @@ module.exports = {
   verifyState,
   exchangeCode,
   fetchDiscordUser,
+  fetchGuildRoles,
   avatarUrl,
   staffIds,
   isAuthorizedDiscord,

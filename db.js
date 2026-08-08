@@ -58,6 +58,7 @@ db.exec(`
     reset_expires     TEXT,
     pending_email     TEXT,
     notify_changes    INTEGER NOT NULL DEFAULT 0,
+    discord_roles     TEXT,
     disabled_reason   TEXT,
     disabled_at       TEXT,
     disabled_by       INTEGER,
@@ -209,6 +210,7 @@ function migrateUsers() {
   add('reset_token', 'TEXT');
   add('reset_expires', 'TEXT');
   add('notify_changes', 'INTEGER NOT NULL DEFAULT 0');
+  add('discord_roles', 'TEXT');
   add('disable_until', 'TEXT');
   add('delete_at', 'TEXT');
   // Altes is_staff-Flag auf neue Rollen abbilden

@@ -72,6 +72,7 @@ global.fetch = async (url, opts = {}) => {
 // /auth/discord erzeugt zufaelligen State
 const { app, sessionStore } = require('./server');
 const { db } = require('./db');
+const config = require('./config');
 
 let server;
 let base;
@@ -499,6 +500,16 @@ function findMail(subjectPart) {
   ok('Push: ungueltige Subscription -> 400', r.status === 400);
   r = await postJson('/api/push/unsubscribe', { endpoint: 'https://push.example/x' }, userCookie);
   ok('Push: Unsubscribe ok', r.status === 200 && r.body.includes('ok'));
+
+  // Discord-Rollen steuern den Zugriff auf "Interne Links"
+  r = await get('/', userCookie);
+  ok('Nutzer ohne Discord-Rolle: keine internen Links', !r.body.includes('Interne Links'));
+  const allowedRole = config.staffDiscordRoleIds && config.staffDiscordRoleIds[0];
+  if (allowedRole) {
+    db.prepare('UPDATE users SET discord_roles = ? WHERE id = ?').run(allowedRole, normalUser.id);
+    r = await get('/', userCookie);
+    ok('Nutzer mit Discord-Rolle: interne Links sichtbar', r.body.includes('Interne Links'));
+  }
 
   // Ohne Login: Einstellungen nicht erreichbar
   r = await get('/account/settings');

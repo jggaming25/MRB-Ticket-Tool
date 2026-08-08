@@ -22,19 +22,19 @@
           <a class="nav-link <%= currentPath.startsWith('/account/settings') ? 'active' : '' %>" href="/account/settings">Einstellungen</a>
           <% if (isHR) { %>
             <a class="nav-link <%= currentPath === '/admin' ? 'active' : '' %>" href="/admin">Alle Tickets</a>
-            <% if (config.staffLinks && config.staffLinks.length) { %>
-              <div class="nav-dropdown">
-                <button type="button" class="nav-link nav-dropdown-toggle" aria-haspopup="true">Interne Links</button>
-                <div class="nav-dropdown-menu">
-                  <% for (const link of config.staffLinks) { %>
-                    <a class="nav-dropdown-item" href="<%= link.url %>" target="_blank" rel="noopener noreferrer">
-                      <span class="nav-dropdown-label"><%= link.label %></span>
-                      <span class="nav-dropdown-url"><%= link.url %></span>
-                    </a>
-                  <% } %>
-                </div>
+          <% } %>
+          <% if (canStaffLinks) { %>
+            <div class="nav-dropdown">
+              <button type="button" class="nav-link nav-dropdown-toggle" aria-haspopup="true">Interne Links</button>
+              <div class="nav-dropdown-menu">
+                <% for (const link of config.staffLinks) { %>
+                  <a class="nav-dropdown-item" href="<%= link.url %>" target="_blank" rel="noopener noreferrer">
+                    <span class="nav-dropdown-label"><%= link.label %></span>
+                    <span class="nav-dropdown-url"><%= link.url %></span>
+                  </a>
+                <% } %>
               </div>
-            <% } %>
+            </div>
           <% } %>
           <% if (isRoot) { %>
             <a class="nav-link <%= currentPath.startsWith('/admin/accounts') ? 'active' : '' %>" href="/admin/accounts">Nutzerverwaltung</a>

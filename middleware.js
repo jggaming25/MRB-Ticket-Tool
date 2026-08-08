@@ -35,6 +35,22 @@ function isActive(u) {
   return !!(u && u.status === 'active');
 }
 
+// Hat der Nutzer eine der in der Konfiguration hinterlegten Discord-Rollen
+// (staffDiscordRoleIds)? Gespeichert wird das beim Login in user.discord_roles.
+function hasStaffDiscordRole(u) {
+  if (!u || !u.discord_roles) return false;
+  const roles = String(u.discord_roles).split(',').map((s) => s.trim()).filter(Boolean);
+  if (!roles.length) return false;
+  const allowed = config.staffDiscordRoleIds || [];
+  return roles.some((r) => allowed.includes(String(r)));
+}
+
+// Zugriff auf "Interne Links" / interne Bereiche: Team/Inhaber (Rolle im
+// System) ODER Nutzer mit einer freigeschalteten Discord-Rolle.
+function canViewStaffLinks(u) {
+  return isHR(u) || hasStaffDiscordRole(u);
+}
+
 // Ticket ist ueberfaellig, wenn das Fälligkeitsdatum in der Vergangenheit
 // liegt und das Ticket nicht geschlossen ist.
 function isOverdue(ticket) {
@@ -59,6 +75,7 @@ function loadUser(req, res, next) {
   res.locals.isHR = isHR(req.user);
   res.locals.isHRHR = isHRHR(req.user);
   res.locals.isRoot = isRoot(req.user);
+  res.locals.canStaffLinks = canViewStaffLinks(req.user);
   res.locals.roleLabel = (r) => ROLE_LABELS[r] || r;
   res.locals.statusLabel = (s) => STATUS_LABELS[s] || s;
   next();
@@ -159,6 +176,8 @@ module.exports = {
   isHRHR,
   isRoot,
   isActive,
+  hasStaffDiscordRole,
+  canViewStaffLinks,
   canEditTicket,
   isOverdue,
   categories,
