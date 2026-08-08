@@ -32,10 +32,10 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // Klickbare Ticket-Zeilen (data-ticket-id)
+  // Klickbare Ticket-Zeilen (data-ticket-id / data-ticket-url)
   document.querySelectorAll('.clickable[data-ticket-id]').forEach((row) => {
     row.addEventListener('click', () => {
-      window.location.href = '/tickets/' + row.dataset.ticketId;
+      window.location.href = row.dataset.ticketUrl || '/tickets/' + row.dataset.ticketId;
     });
   });
 

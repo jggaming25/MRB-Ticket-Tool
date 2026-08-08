@@ -10,7 +10,7 @@
         <a class="btn btn-ghost" href="/tickets/new">Neues Ticket</a>
       <% } else { %>
         <a class="btn btn-primary" href="/login">Jetzt einloggen (Discord)</a>
-        <p class="hint">Nach dem Login siehst du hier alle internen Bereiche und Links – wenn du auf Discord deine Rolle bereits erhalten hast. Sonst siehst du nur deine Tickets.</p>
+        <p class="hint"><%= config.home.heroHint %></p>
       <% } %>
     </div>
   </div>

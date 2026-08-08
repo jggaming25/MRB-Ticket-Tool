@@ -4,57 +4,46 @@
 
   <div class="page-head">
     <div>
-      <a class="btn btn-ghost btn-sm" href="<%= isHR ? '/admin' : '/dashboard' %>">← Zurück</a>
+      <a class="btn btn-ghost btn-sm" href="<%= fromAdmin ? '/admin' : '/dashboard' %>">← Zurück</a>
       <h1 class="mt-sm">
         Ticket #<%= String(ticket.number).padStart(4, '0') %>
         <span class="tag status-<%= ticket.status %>"><%= statusLabel(ticket.status) %></span>
         <% if (od) { %><span class="badge badge-overdue">Überfällig</span><% } %>
       </h1>
     </div>
-    <div class="btn-group">
-      <% if (canClaim) { %>
-        <form method="post" action="/admin/tickets/<%= ticket.id %>/claim" class="inline-form">
-          <button type="submit" class="btn btn-primary">Übernehmen</button>
-        </form>
-      <% } %>
-      <% if (canUnclaim) { %>
-        <form method="post" action="/admin/tickets/<%= ticket.id %>/unclaim" class="inline-form">
-          <button type="submit" class="btn btn-ghost">Übernahme abgeben</button>
-        </form>
-      <% } %>
-      <% if (canRelease) { %>
-        <button type="button" class="btn btn-secondary" data-open="#releasePanel">Freigabe zur Schließung</button>
-      <% } %>
-      <% if (canClose) { %>
-        <form method="post" action="/tickets/<%= ticket.id %>/close" class="inline-form"
-              data-confirm="Ticket wirklich schließen? Nur Inhaber kann das rückgängig machen.">
-          <button type="submit" class="btn btn-danger">Ticket schließen</button>
-        </form>
-      <% } %>
-      <% if (canReopen) { %>
-        <form method="post" action="/tickets/<%= ticket.id %>/reopen" class="inline-form"
-              data-confirm="Ticket wieder öffnen?">
-          <button type="submit" class="btn btn-primary">Wieder öffnen</button>
-        </form>
-      <% } %>
-    </div>
-  </div>
-
-  <% if (canRelease) { %>
-    <div class="panel panel-collapsible hidden" id="releasePanel">
-      <div class="card">
-        <h3>Freigabe zur Schließung beantragen</h3>
-        <p class="hint">Beschreibe, was du zur Lösung des Tickets erledigt hast. Danach entscheidet der Inhaber über das Schließen.</p>
-        <form method="post" action="/admin/tickets/<%= ticket.id %>/release">
-          <div class="form-group">
-            <label for="release-report">Abschlussbericht</label>
-            <textarea id="release-report" name="report" rows="4" required placeholder="Was wurde erledigt? Welche Lösung wurde umgesetzt?"></textarea>
-          </div>
-          <button type="submit" class="btn btn-secondary">Zur Freigabe vorlegen</button>
-        </form>
+    <% if (fromAdmin) { %>
+      <div class="btn-group">
+        <% if (canClaim) { %>
+          <form method="post" action="/admin/tickets/<%= ticket.id %>/claim" class="inline-form">
+            <button type="submit" class="btn btn-primary">Übernehmen</button>
+          </form>
+        <% } %>
+        <% if (canUnclaim) { %>
+          <form method="post" action="/admin/tickets/<%= ticket.id %>/unclaim" class="inline-form">
+            <button type="submit" class="btn btn-ghost">Übernahme abgeben</button>
+          </form>
+        <% } %>
+        <% if (canRelease) { %>
+          <form method="post" action="/admin/tickets/<%= ticket.id %>/release" class="inline-form"
+                data-confirm="Ticket wirklich zur Freigabe vorlegen?">
+            <button type="submit" class="btn btn-secondary">Freigeben</button>
+          </form>
+        <% } %>
+        <% if (canClose) { %>
+          <form method="post" action="/tickets/<%= ticket.id %>/close" class="inline-form"
+                data-confirm="Ticket wirklich schließen? Nur Inhaber kann das rückgängig machen.">
+            <button type="submit" class="btn btn-danger">Ticket schließen</button>
+          </form>
+        <% } %>
+        <% if (canReopen) { %>
+          <form method="post" action="/tickets/<%= ticket.id %>/reopen" class="inline-form"
+                data-confirm="Ticket wieder öffnen?">
+            <button type="submit" class="btn btn-primary">Wieder öffnen</button>
+          </form>
+        <% } %>
       </div>
-    </div>
-  <% } %>
+    <% } %>
+  </div>
 
   <div class="ticket-layout">
     <div class="ticket-main">
@@ -127,7 +116,7 @@
         </div>
       <% } else if (ticket.status === 'release') { %>
         <div class="alert alert-info">
-          Dieses Ticket ist zur <strong>Freigabe zur Schließung</strong> vorgelegt und wird vom Inhaber geprüft. Es kann weiterhin geantwortet werden.
+          Dieses Ticket ist zur <strong>Freigabe</strong> vorgelegt und wird vom Inhaber geprüft. Es kann weiterhin geantwortet werden.
         </div>
       <% } else if (canEdit) { %>
         <div class="card reply-card">
@@ -157,7 +146,7 @@
       <% } %>
     </div>
 
-    <% if (isHR && canEdit) { %>
+    <% if (fromAdmin && isHR && canEdit) { %>
       <aside class="ticket-side">
         <div class="card">
           <h3>Ticket-Info</h3>

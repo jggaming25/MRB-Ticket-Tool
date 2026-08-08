@@ -216,28 +216,29 @@ function customerEmailOf(ticket) {
   return u && u.email ? u.email : null;
 }
 
-async function notifyCustomer(ticket, subject, summary, opts = {}) {
+async function notifyCustomer(ticket, subject, summary) {
   const to = customerEmailOf(ticket);
-  if (to) {
-    try {
-      await mailer.sendTicketActivity(to, ticket.number, ticket.subject, summary);
-    } catch (err) {
-      console.error('Kundenmail fehlgeschlagen:', err.message);
-    }
+  if (!to) return;
+  try {
+    await mailer.sendTicketActivity(to, ticket.number, ticket.subject, summary);
+  } catch (err) {
+    console.error('Kundenmail fehlgeschlagen:', err.message);
   }
-  // Web-Push an den Ticket-Besitzer (funktioniert auch, wenn die Website
-  // geschlossen ist, solange der Browser läuft). Nur wenn dieser die
-  // Benachrichtigungen in den Kontoeinstellungen aktiviert hat und die
-  // Änderung nicht von ihm selbst stammt.
-  if (ticket && ticket.user_id && opts.skipPushTo !== ticket.user_id) {
-    const owner = db.prepare('SELECT notify_changes FROM users WHERE id = ?').get(ticket.user_id);
-    if (owner && owner.notify_changes === 1) {
-      push.sendToUser(ticket.user_id, {
-        title: `Ticket #${String(ticket.number).padStart(4, '0')}: ${subject}`,
-        body: summary,
-        url: `${BASE_URL}/tickets/${ticket.id}`,
-      });
-    }
+}
+
+// Web-Push an den Ticket-Besitzer (funktioniert auch, wenn die Website
+// geschlossen ist, solange der Browser läuft). Nur wenn dieser die
+// Benachrichtigungen in den Kontoeinstellungen aktiviert hat. Wird nur bei
+// neuen Einträgen, Übernahmen und Freigaben aufgerufen.
+function notifyOwnerPush(ticket, title, body) {
+  if (!ticket || !ticket.user_id) return;
+  const owner = db.prepare('SELECT notify_changes FROM users WHERE id = ?').get(ticket.user_id);
+  if (owner && owner.notify_changes === 1) {
+    push.sendToUser(ticket.user_id, {
+      title: `Ticket #${String(ticket.number).padStart(4, '0')}: ${title}`,
+      body,
+      url: `${BASE_URL}/tickets/${ticket.id}`,
+    });
   }
 }
 
@@ -758,15 +759,6 @@ app.get('/tickets/:id', requireLogin, loadTicketFor, (req, res) => {
   const canEdit = canEditTicket(req.user, ticket);
   markOverdue(ticket);
 
-  // HR/HR-HR-Accounts als Übergabe-Ziele
-  const staffUsers = isHR(req.user)
-    ? db.prepare(`
-        SELECT id, username, global_name, role FROM users
-        WHERE role IN ('hr','hrhr') AND status = 'active' AND id != ?
-        ORDER BY username ASC
-      `).all(req.user.id)
-    : [];
-
   // Vollstaendiges Audit-Log des Tickets
   const logs = db.prepare(`
     SELECT l.*, a.username AS actor_name, a.global_name AS actor_global
@@ -778,6 +770,19 @@ app.get('/tickets/:id', requireLogin, loadTicketFor, (req, res) => {
 
   const isClosed = ticket.status === 'closed';
 
+  // Verwaltungs-Aktionen (schließen, freigeben, übernehmen, Fälligkeit …) nur
+  // sichtbar, wenn das Ticket über "Alle Tickets" (Admin) geöffnet wurde.
+  const fromAdmin = req.query.ctx === 'admin';
+
+  // HR/HR-HR-Accounts als Übergabe-Ziele
+  const staffUsers = fromAdmin && isHR(req.user)
+    ? db.prepare(`
+        SELECT id, username, global_name, role FROM users
+        WHERE role IN ('hr','hrhr') AND status = 'active' AND id != ?
+        ORDER BY username ASC
+      `).all(req.user.id)
+    : [];
+
   res.render('ticket-view', {
     title: `Ticket #${String(ticket.number).padStart(4, '0')}`,
     ticket,
@@ -787,13 +792,14 @@ app.get('/tickets/:id', requireLogin, loadTicketFor, (req, res) => {
     claimedBy,
     logs,
     canEdit,
-    canClaim: isHR(req.user) && !ticket.claimed_by && !isClosed,
-    canUnclaim: isHR(req.user) && ticket.claimed_by === req.user.id,
-    // Nur HR-HR schließt Tickets. HR-Bearbeiter stellen sie zur Freigabe.
-    canRelease: isHR(req.user) && !isHRHR(req.user) && ticket.status === 'pending' && ticket.claimed_by === req.user.id,
-    canSetDue: canEdit && !isClosed,
-    canClose: isHRHR(req.user) && !isClosed,
-    canReopen: isHRHR(req.user) && isClosed,
+    fromAdmin,
+    canClaim: fromAdmin && isHR(req.user) && !ticket.claimed_by && !isClosed,
+    canUnclaim: fromAdmin && isHR(req.user) && ticket.claimed_by === req.user.id,
+    // HR-Bearbeiter gibt nach der Übernahme frei; HR-HR schliesst.
+    canRelease: fromAdmin && isHR(req.user) && !isHRHR(req.user) && ticket.status === 'pending' && ticket.claimed_by === req.user.id,
+    canSetDue: fromAdmin && canEdit && !isClosed,
+    canClose: fromAdmin && isHRHR(req.user) && !isClosed,
+    canReopen: fromAdmin && isHRHR(req.user) && isClosed,
   });
 });
 
@@ -843,8 +849,14 @@ app.post('/tickets/:id/message', requireLogin, loadTicketFor, upload.single('att
 
   logTicketAction(ticket.id, req.user.id, 'reply', `Nachricht von ${isStaff ? 'Support' : 'Kunde'}`);
   await notifyCustomer({ ...ticket, user_id: ticket.user_id }, ticket.subject,
-    isStaff ? 'Der Support hat auf dein Ticket geantwortet.' : 'Deine Antwort wurde gespeichert.',
-    { skipPushTo: req.user.id });
+    isStaff ? 'Der Support hat auf dein Ticket geantwortet.' : 'Deine Antwort wurde gespeichert.');
+
+  // Push-Benachrichtigung nur bei neuen Einträgen (und nicht an den Verfasser):
+  // mit einem kurzen Ausschnitt der Nachricht.
+  if (isStaff) {
+    notifyOwnerPush(ticket, 'Neue Nachricht',
+      (body ? body.slice(0, 100) : '(Anhang)') + (body && body.length > 100 ? '…' : ''));
+  }
 
   res.redirect(`/tickets/${ticket.id}#last`);
 });
@@ -1026,6 +1038,8 @@ app.post('/admin/tickets/:id/claim', requireHR, (req, res) => {
   const who = req.user.global_name || req.user.username;
   logTicketAction(ticket.id, req.user.id, 'claimed', `Übernommen von ${who}`);
   insertSystemMessage(ticket.id, `Ticket wurde von ${who} uebernommen.`);
+  notifyOwnerPush(ticket, 'Ticket übernommen',
+    `Dein Ticket wird jetzt von ${who} bearbeitet.`);
   flash(req, 'success', 'Ticket uebernommen. Nur du kannst es jetzt bearbeiten.');
   res.redirect(`/tickets/${ticket.id}`);
 });
@@ -1106,31 +1120,27 @@ app.post('/admin/tickets/:id/transfer', requireHR, loadTicketFor, async (req, re
 });
 
 // ---------------------------------------------------------------------------
-// Freigabe zur Schliessung: HR legt Abschlussbericht vor, HR-HR schliesst.
+// Freigabe: HR setzt das Ticket auf Status "freigeben", HR-HR schliesst.
 // ---------------------------------------------------------------------------
 app.post('/admin/tickets/:id/release', requireHR, loadTicketFor, async (req, res) => {
   const { ticket } = req;
   if (ticket.status !== 'pending') {
-    flash(req, 'error', 'Nur Tickets "In Bearbeitung" können zur Freigabe vorgelegt werden.');
+    flash(req, 'error', 'Nur Tickets "In Bearbeitung" können freigegeben werden.');
     return res.redirect(`/tickets/${ticket.id}`);
   }
   if (ticket.claimed_by !== req.user.id) {
-    flash(req, 'error', 'Nur der aktuelle Bearbeiter kann das Ticket zur Freigabe vorlegen.');
-    return res.redirect(`/tickets/${ticket.id}`);
-  }
-
-  const report = String(req.body.report || '').trim();
-  if (report.length < 5) {
-    flash(req, 'error', 'Bitte beschreibe den Abschlussbericht (mindestens 5 Zeichen).');
+    flash(req, 'error', 'Nur der aktuelle Bearbeiter kann das Ticket freigeben.');
     return res.redirect(`/tickets/${ticket.id}`);
   }
 
   const now = new Date().toISOString();
-  db.prepare('UPDATE tickets SET status = ? WHERE id = ?').run('release', ticket.id);
-  insertSystemMessage(ticket.id, `Freigabe zur Schliessung beantragt. Abschlussbericht: ${report}`);
-  logTicketAction(ticket.id, req.user.id, 'release_requested', `Freigabe zur Schliessung beantragt (Abschlussbericht eingereicht)`);
+  db.prepare('UPDATE tickets SET status = ?, updated_at = ? WHERE id = ?').run('release', now, ticket.id);
+  insertSystemMessage(ticket.id, `Ticket wurde von ${req.user.global_name || req.user.username} zur Freigabe vorgelegt.`);
+  logTicketAction(ticket.id, req.user.id, 'release_requested', 'Freigabe beantragt');
 
   await notifyCustomer(ticket, ticket.subject, 'Dein Ticket ist bearbeitet und wartet auf die endgültige Freigabe.');
+  notifyOwnerPush(ticket, 'Freigabe',
+    'Dein Ticket wurde zur Freigabe vorgelegt und wird vom Inhaber geprüft.');
   flash(req, 'success', 'Ticket zur Freigabe vorgelegt. Der Inhaber entscheidet über das Schließen.');
   res.redirect(`/tickets/${ticket.id}`);
 });

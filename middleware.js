@@ -13,7 +13,7 @@ const STATUS_LABELS = {
 const TICKET_STATUS_LABELS = {
   open: 'Offen',
   pending: 'In Bearbeitung',
-  release: 'Freigabe zur Schließung',
+  release: 'Freigabe',
   closed: 'Geschlossen',
 };
 

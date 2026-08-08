@@ -45,7 +45,7 @@
           <option value="all" <%= filters.status === 'all' ? 'selected' : '' %>>Alle</option>
           <option value="open" <%= filters.status === 'open' ? 'selected' : '' %>>Offen</option>
           <option value="pending" <%= filters.status === 'pending' ? 'selected' : '' %>>In Bearbeitung</option>
-          <option value="release" <%= filters.status === 'release' ? 'selected' : '' %>>Freigabe zur Schließung</option>
+          <option value="release" <%= filters.status === 'release' ? 'selected' : '' %>>Freigabe</option>
           <option value="overdue" <%= filters.status === 'overdue' ? 'selected' : '' %>>Überfällig</option>
           <option value="closed" <%= filters.status === 'closed' ? 'selected' : '' %>>Geschlossen</option>
         </select>
@@ -101,7 +101,7 @@
         <tbody>
           <% tickets.forEach((t) => { %>
             <% const tOd = isOverdue(t); %>
-            <tr class="clickable <%= tOd ? 'row-overdue' : '' %>" data-ticket-id="<%= t.id %>">
+            <tr class="clickable <%= tOd ? 'row-overdue' : '' %>" data-ticket-id="<%= t.id %>" data-ticket-url="/tickets/<%= t.id %>?ctx=admin">
               <td class="mono">#<%= String(t.number).padStart(4, '0') %></td>
               <td class="td-subject"><%= t.subject %></td>
               <td>

@@ -23,6 +23,10 @@ module.exports = {
       'Wir bauen die Mitteldeutsche Regionalbahn in Roblox nach – von der Fahrzeugausstattung über ' +
       'den Fahrplan bis zum Bahnbetrieb. Dieses Ticketsystem ist der zentrale Anlaufpunkt für ' +
       'Feedback, Fehlermeldungen und Anfragen zu unserem Projekt.',
+    // Hinweis auf der Startseite für noch nicht eingeloggte Besucher.
+    heroHint:
+      'Nach dem Login siehst du hier alle internen Bereiche und Links – wenn du auf Discord ' +
+      'deine Rolle bereits erhalten hast. Sonst siehst du nur deine Tickets.',
     sections: [
       {
         title: 'Über das Projekt',
