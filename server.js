@@ -314,6 +314,34 @@ function freshDueDate() {
   return new Date(Date.now() + config.due.defaultHours * 60 * 60 * 1000).toISOString();
 }
 
+// ---- Bearbeitungs-Sperre (Write-Lock) --------------------------------------
+// Nur ein Bearbeiter darf gleichzeitig in einem Ticket eintragen. Solange eine
+// frische Sperre (Heartbeat) eines anderen Bearbeiters besteht, ist die Eingabe
+// gesperrt. Der Inhaber (HR-HR) ist immer ausgenommen.
+const LOCK_TTL_MS = 90 * 1000;
+
+function lockIsFresh(lockedAt) {
+  if (!lockedAt) return false;
+  return Date.now() - new Date(lockedAt).getTime() < LOCK_TTL_MS;
+}
+
+function lockOwner(ticket) {
+  if (!ticket || !ticket.locked_by || !lockIsFresh(ticket.locked_at)) return null;
+  return db.prepare('SELECT id, username, global_name FROM users WHERE id = ?').get(ticket.locked_by) || null;
+}
+
+function lockBlocks(ticket, user) {
+  if (isHRHR(user)) return false;
+  const owner = lockOwner(ticket);
+  return !!(owner && owner.id !== user.id);
+}
+
+function lockErrorMessage(ticket) {
+  const owner = lockOwner(ticket);
+  const name = owner ? (owner.global_name || owner.username) : 'ein anderer Bearbeiter';
+  return `Das Ticket wird gerade von ${name} bearbeitet. Die Eingabe ist gesperrt – versuche es später erneut.`;
+}
+
 // ---- Homepage-Bilder -------------------------------------------------------
 function getHomeImages() {
   const dir = config.home.imageDir;
@@ -961,6 +989,10 @@ app.get('/tickets/:id', requireLogin, loadTicketFor, (req, res) => {
       `).all(req.user.id)
     : [];
 
+  const lockOwnerInfo = lockOwner(ticket);
+  const lockBlocked = isHR(req.user) && !isHRHR(req.user) &&
+    !!lockOwnerInfo && lockOwnerInfo.id !== req.user.id;
+
   res.render('ticket-view', {
     title: `Ticket #${String(ticket.number).padStart(4, '0')}`,
     ticket,
@@ -973,14 +1005,19 @@ app.get('/tickets/:id', requireLogin, loadTicketFor, (req, res) => {
     fromAdmin,
     canClaim: fromAdmin && isHR(req.user) && !ticket.claimed_by && !isClosed,
     canUnclaim: fromAdmin && isHR(req.user) && ticket.claimed_by === req.user.id,
-    // HR-Bearbeiter gibt nach der Übernahme frei; HR-HR schliesst. Der Button
-    // ist für den Bearbeiter immer sichtbar, solange er das Ticket übernommen
-    // hat und es weder geschlossen noch bereits zur Freigabe vorgelegt ist.
-    canRelease: fromAdmin && isHR(req.user) && !isHRHR(req.user) && !isClosed &&
-      ticket.status !== 'release' && ticket.claimed_by === req.user.id,
+    // "Zum Schließen Freigeben": jeder Bearbeiter (auch der Inhaber) kann das
+    // Ticket zur Freigabe vorlegen. Danach kann nur noch der Inhaber schließen.
+    canRelease: fromAdmin && isHR(req.user) && !isClosed &&
+      ticket.status !== 'release',
+    canSetStatus: fromAdmin && isHR(req.user) && !isClosed &&
+      ['open', 'pending', 'overdue'].includes(ticket.status),
     canSetDue: fromAdmin && canEdit && !isClosed,
-    canClose: fromAdmin && isHRHR(req.user) && !isClosed,
+    // Schließen: nur Inhaber (HR-HR) und nur, wenn der Bearbeiter das Ticket
+    // zur Freigabe vorgelegt hat (Status "release").
+    canClose: fromAdmin && isHRHR(req.user) && !isClosed && ticket.status === 'release',
     canReopen: fromAdmin && isHRHR(req.user) && isClosed,
+    lockBlocked,
+    lockHolderName: lockOwnerInfo ? (lockOwnerInfo.global_name || lockOwnerInfo.username) : null,
   });
 });
 
@@ -992,6 +1029,13 @@ app.post('/tickets/:id/message', requireLogin, loadTicketFor, upload.single('att
     if (req.file) fs.unlinkSync(req.file.path);
     return renderError(res, 403, 'Kein Zugriff',
       ticket.claimed_by ? 'Dieses Ticket ist bereits an einen anderen Mitarbeiter vergeben.' : 'Du darfst dieses Ticket nicht bearbeiten.');
+  }
+
+  // Write-Lock: nur ein Bearbeiter darf gleichzeitig eintragen.
+  if (isHR(req.user) && lockBlocks(ticket, req.user)) {
+    if (req.file) fs.unlinkSync(req.file.path);
+    flash(req, 'error', lockErrorMessage(ticket));
+    return res.redirect(`/tickets/${ticket.id}`);
   }
 
   if (ticket.status === 'closed') {
@@ -1050,18 +1094,17 @@ app.post('/tickets/:id/message', requireLogin, loadTicketFor, upload.single('att
   res.redirect(`/tickets/${ticket.id}#last`);
 });
 
-// Schließen: ausschliesslich HR-HR. Ohne Vorwarnung nur, wenn das Ticket zur
-// Freigabe steht (Status "release"); andernfalls muss force=1 bestätigt werden.
+// Schließen: ausschliesslich HR-HR und nur, wenn der Bearbeiter das Ticket
+// zur Freigabe vorgelegt hat (Status "release").
 app.post('/tickets/:id/close', requireHRHR, loadTicketFor, async (req, res) => {
   const { ticket } = req;
   if (ticket.status === 'closed') {
     flash(req, 'error', 'Das Ticket ist bereits geschlossen.');
     return res.redirect(`/tickets/${ticket.id}`);
   }
-  if (ticket.status !== 'release' && req.body.force !== '1') {
+  if (ticket.status !== 'release') {
     flash(req, 'error',
-      'Vorwarnung: Das Ticket wurde nicht vom Bearbeiter zur Freigabe vorgelegt. ' +
-      'Bestätige das Schließen erneut, um es trotzdem zu schließen.');
+      'Das Ticket wurde nicht vom Bearbeiter zur Freigabe vorgelegt. Nur Tickets mit Freigabe-Status können geschlossen werden.');
     return res.redirect(`/tickets/${ticket.id}`);
   }
   const now = new Date().toISOString();
@@ -1197,10 +1240,16 @@ app.post('/admin/tickets/:id/status', requireHR, (req, res) => {
   if (!ticket) return res.status(404).end();
   if (!canEditTicket(req.user, ticket)) return res.status(403).end();
 
+  // Write-Lock: nur ein Bearbeiter darf gleichzeitig eintragen.
+  if (lockBlocks(ticket, req.user)) {
+    flash(req, 'error', lockErrorMessage(ticket));
+    return res.redirect(`/tickets/${ticket.id}`);
+  }
+
   const status = req.body.status;
-  // HR darf nur in Bearbeitung stellen; Freigabe/Schließen läuft über eigene Routen.
+  // HR darf nur Offen/In Bearbeitung setzen; Freigabe/Schließen läuft über eigene Routen.
   if (!['open', 'pending'].includes(status)) return res.status(400).end();
-  if (ticket.status === 'closed' && status !== 'pending') return res.status(400).end();
+  if (ticket.status === 'closed') return res.status(400).end();
 
   const now = new Date().toISOString();
   db.prepare('UPDATE tickets SET status = ?, updated_at = ?, due_at = ? WHERE id = ?')
@@ -1243,7 +1292,8 @@ app.post('/admin/tickets/:id/claim', requireHR, (req, res) => {
   res.redirect(`/tickets/${ticket.id}`);
 });
 
-// Claim aufheben (Claimer selbst oder HR-HR)
+// Übernahme freigeben (Claimer selbst oder HR-HR): Damit andere Bearbeiter
+// das Ticket wieder übernehmen können.
 app.post('/admin/tickets/:id/unclaim', requireHR, (req, res) => {
   const ticket = db.prepare('SELECT * FROM tickets WHERE id = ?').get(req.params.id);
   if (!ticket) return res.status(404).end();
@@ -1257,10 +1307,43 @@ app.post('/admin/tickets/:id/unclaim', requireHR, (req, res) => {
   `).run(now, ticket.id);
 
   const who = req.user.global_name || req.user.username;
-  logTicketAction(ticket.id, req.user.id, 'unclaimed', `Übernahme von ${who} aufgehoben`);
-  insertSystemMessage(ticket.id, `Uebernahme von ${who} aufgehoben. Das Ticket ist wieder frei.`);
-  flash(req, 'success', 'Uebernahme aufgehoben.');
+  logTicketAction(ticket.id, req.user.id, 'unclaimed', `Übernahme von ${who} freigegeben`);
+  insertSystemMessage(ticket.id, `Uebernahme von ${who} freigegeben. Das Ticket ist wieder frei.`);
+  flash(req, 'success', 'Übernahme freigegeben. Andere Bearbeiter können das Ticket jetzt übernehmen.');
   res.redirect(`/tickets/${ticket.id}`);
+});
+
+// ---------------------------------------------------------------------------
+// Bearbeitungs-Sperre (Write-Lock): Der Bearbeiter, der das Ticket gerade
+// offen hat, hält die Sperre (Heartbeat). Andere Bearbeiter können dann nicht
+// gleichzeitig eintragen.
+// ---------------------------------------------------------------------------
+app.post('/admin/tickets/:id/lock', requireHR, (req, res) => {
+  const ticket = db.prepare('SELECT id, locked_by, locked_at, status FROM tickets WHERE id = ?').get(req.params.id);
+  if (!ticket) return res.status(404).json({ ok: false });
+
+  const action = (req.body && req.body.action) || req.query.action || 'acquire';
+
+  if (action === 'release') {
+    if (ticket.locked_by === req.user.id) {
+      db.prepare('UPDATE tickets SET locked_by = NULL, locked_at = NULL WHERE id = ?').run(ticket.id);
+    }
+    return res.json({ ok: true });
+  }
+
+  const fresh = lockIsFresh(ticket.locked_at);
+  if (ticket.locked_by && ticket.locked_by !== req.user.id && fresh) {
+    const holder = db.prepare('SELECT id, username, global_name FROM users WHERE id = ?').get(ticket.locked_by);
+    return res.status(409).json({
+      ok: false,
+      heldById: holder ? holder.id : null,
+      heldByName: holder ? (holder.global_name || holder.username) : 'ein anderer Bearbeiter',
+    });
+  }
+
+  const now = new Date().toISOString();
+  db.prepare('UPDATE tickets SET locked_by = ?, locked_at = ? WHERE id = ?').run(req.user.id, now, ticket.id);
+  res.json({ ok: true });
 });
 
 // ---------------------------------------------------------------------------
@@ -1275,6 +1358,12 @@ app.post('/admin/tickets/:id/transfer', requireHR, loadTicketFor, async (req, re
   // Nur aktueller Bearbeiter oder HR-HR kann übergeben
   if (ticket.claimed_by && ticket.claimed_by !== req.user.id && !isHRHR(req.user)) {
     flash(req, 'error', 'Nur der aktuelle Bearbeiter (oder der Inhaber) kann das Ticket übergeben.');
+    return res.redirect(`/tickets/${ticket.id}`);
+  }
+
+  // Write-Lock: nur ein Bearbeiter darf gleichzeitig eintragen.
+  if (lockBlocks(ticket, req.user)) {
+    flash(req, 'error', lockErrorMessage(ticket));
     return res.redirect(`/tickets/${ticket.id}`);
   }
 
@@ -1316,7 +1405,8 @@ app.post('/admin/tickets/:id/transfer', requireHR, loadTicketFor, async (req, re
 });
 
 // ---------------------------------------------------------------------------
-// Freigabe: HR setzt das Ticket auf Status "freigeben", HR-HR schliesst.
+// Freigabe ("Zum Schließen Freigeben"): jeder Bearbeiter kann das Ticket zur
+// Freigabe vorlegen. Danach kann nur noch der Inhaber das Ticket schließen.
 // ---------------------------------------------------------------------------
 app.post('/admin/tickets/:id/release', requireHR, loadTicketFor, async (req, res) => {
   const { ticket } = req;
@@ -1328,8 +1418,10 @@ app.post('/admin/tickets/:id/release', requireHR, loadTicketFor, async (req, res
     flash(req, 'error', 'Das Ticket ist bereits zur Freigabe vorgelegt.');
     return res.redirect(`/tickets/${ticket.id}`);
   }
-  if (ticket.claimed_by !== req.user.id) {
-    flash(req, 'error', 'Nur der aktuelle Bearbeiter kann das Ticket freigeben.');
+
+  // Write-Lock: nur ein Bearbeiter darf gleichzeitig eintragen.
+  if (lockBlocks(ticket, req.user)) {
+    flash(req, 'error', lockErrorMessage(ticket));
     return res.redirect(`/tickets/${ticket.id}`);
   }
 
@@ -1359,6 +1451,12 @@ app.post('/admin/tickets/:id/due', requireHR, loadTicketFor, async (req, res) =>
   }
   if (ticket.status === 'closed') {
     flash(req, 'error', 'Geschlossene Tickets haben keine Fälligkeit.');
+    return res.redirect(`/tickets/${ticket.id}`);
+  }
+
+  // Write-Lock: nur ein Bearbeiter darf gleichzeitig eintragen.
+  if (lockBlocks(ticket, req.user)) {
+    flash(req, 'error', lockErrorMessage(ticket));
     return res.redirect(`/tickets/${ticket.id}`);
   }
 

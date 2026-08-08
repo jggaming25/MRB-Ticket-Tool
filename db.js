@@ -157,6 +157,8 @@ function migrateTickets() {
   add('claimed_by', 'INTEGER REFERENCES users(id) ON DELETE SET NULL');
   add('due_at', 'TEXT');
   add('next_action', 'TEXT');
+  add('locked_by', 'INTEGER');
+  add('locked_at', 'TEXT');
   db.exec(`
     CREATE TABLE IF NOT EXISTS ticket_logs (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -273,7 +275,7 @@ const LOG_ACTION_LABELS = {
   reopened: 'Wieder geöffnet',
   status: 'Status geändert',
   claimed: 'Übernommen',
-  unclaimed: 'Übernahme aufgehoben',
+  unclaimed: 'Übernahme freigegeben',
   transferred: 'Übertragen',
   release_requested: 'Freigabe beantragt',
   due_set: 'Fälligkeit gesetzt',
@@ -309,7 +311,7 @@ function logActionLabel(action, detail) {
 const TICKET_ACTION_BY_TEXT = [
   [/wieder geöffnet|wieder geoeffnet/i, 'reopened'],
   [/Freigabe beantragt/i, 'release_requested'],
-  [/Übernahme von .* aufgehoben|aufgehoben/i, 'unclaimed'],
+  [/Übernahme von .* aufgehoben|Übernahme von .* freigegeben|freigegeben|aufgehoben/i, 'unclaimed'],
   [/Übernommen von/i, 'claimed'],
   [/Übergeben an|übergeben/i, 'transferred'],
   [/Fälligkeit/i, 'due_set'],

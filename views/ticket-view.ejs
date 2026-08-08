@@ -12,31 +12,27 @@
       </h1>
     </div>
     <% if (fromAdmin) { %>
-      <div class="btn-group">
+      <div class="btn-group mrb-lockable">
         <% if (canClaim) { %>
           <form method="post" action="/admin/tickets/<%= ticket.id %>/claim" class="inline-form">
             <button type="submit" class="btn btn-primary">Übernehmen</button>
           </form>
         <% } %>
         <% if (canUnclaim) { %>
-          <form method="post" action="/admin/tickets/<%= ticket.id %>/unclaim" class="inline-form">
-            <button type="submit" class="btn btn-ghost">Übernahme abgeben</button>
+          <form method="post" action="/admin/tickets/<%= ticket.id %>/unclaim" class="inline-form"
+                data-confirm="Übernahme wirklich freigeben? Andere Bearbeiter können das Ticket dann übernehmen.">
+            <button type="submit" class="btn btn-ghost">Freigeben</button>
           </form>
         <% } %>
         <% if (canRelease) { %>
           <form method="post" action="/admin/tickets/<%= ticket.id %>/release" class="inline-form"
-                data-confirm="Ticket wirklich zur Freigabe vorlegen?">
-            <button type="submit" class="btn btn-secondary">Freigeben</button>
+                data-confirm="Ticket wirklich zum Schließen freigeben? Danach kann nur noch der Inhaber Änderungen am Ticket vornehmen.">
+            <button type="submit" class="btn btn-secondary">Zum Schließen Freigeben</button>
           </form>
         <% } %>
         <% if (canClose) { %>
           <form method="post" action="/tickets/<%= ticket.id %>/close" class="inline-form"
-                <% if (ticket.status !== 'release') { %>
-                  data-force-confirm="Achtung: Das Ticket wurde NICHT vom Bearbeiter zur Freigabe vorgelegt. Trotzdem schließen?"
-                <% } else { %>
-                  data-confirm="Ticket wirklich schließen? Nur Inhaber kann das rückgängig machen."
-                <% } %>>
-            <input type="hidden" name="force" value="0">
+                data-confirm="Ticket wirklich schließen? Nur der Inhaber kann das rückgängig machen.">
             <button type="submit" class="btn btn-danger">Ticket schließen</button>
           </form>
         <% } %>
@@ -75,6 +71,15 @@
           </div>
         <% } %>
       </div>
+
+      <% if (fromAdmin && isHR && !isHRHR && ticket.status !== 'closed') { %>
+        <div class="alert alert-error mrb-lock-banner" id="mrb-lock-banner" <%= lockBlocked ? '' : 'hidden' %>>
+          Dieses Ticket wird gerade von <strong><%= lockHolderName || 'einem anderen Bearbeiter' %></strong> bearbeitet. Die Eingabe ist gesperrt – sobald er fertig ist, kannst du automatisch weitermachen.
+        </div>
+        <div class="alert alert-info mrb-lock-banner" id="mrb-lock-held-banner" hidden>
+          Du bearbeitest dieses Ticket gerade – niemand anderes kann jetzt gleichzeitig eintragen.
+        </div>
+      <% } %>
 
       <div class="thread" id="last">
         <% messages.forEach((m) => { %>
@@ -124,7 +129,7 @@
           Dieses Ticket ist zur <strong>Freigabe</strong> vorgelegt und wird vom Inhaber geprüft. Es kann weiterhin geantwortet werden.
         </div>
       <% } else if (canEdit) { %>
-        <div class="card reply-card">
+        <div class="card reply-card mrb-lockable">
           <h3>Antworten</h3>
           <form method="post" action="/tickets/<%= ticket.id %>/message" enctype="multipart/form-data" id="reply-form">
             <div class="form-group">
@@ -152,7 +157,7 @@
     </div>
 
     <% if (fromAdmin && isHR && canEdit) { %>
-      <aside class="ticket-side">
+      <aside class="ticket-side mrb-lockable">
         <div class="card">
           <h3>Ticket-Info</h3>
           <div class="ticket-info">
@@ -165,6 +170,24 @@
             <div class="info-row"><span>Geschlossen</span><span><%= fmtDate(ticket.closed_at) %></span></div>
           </div>
         </div>
+
+        <% if (canSetStatus) { %>
+          <div class="card">
+            <h3>Status setzen</h3>
+            <form method="post" action="/admin/tickets/<%= ticket.id %>/status">
+              <div class="form-group">
+                <select class="input" name="status">
+                  <% if (ticket.status === 'overdue') { %>
+                    <option value="" disabled>Überfällig – neuer Status wählen</option>
+                  <% } %>
+                  <option value="open" <%= ticket.status === 'open' ? 'selected' : '' %>>Offen</option>
+                  <option value="pending" <%= ticket.status === 'pending' ? 'selected' : '' %>>In Bearbeitung</option>
+                </select>
+              </div>
+              <button type="submit" class="btn btn-secondary btn-sm">Status setzen</button>
+            </form>
+          </div>
+        <% } %>
 
         <% if (canSetDue) { %>
           <div class="card">
@@ -237,5 +260,57 @@
       </table>
     <% } %>
   </div>
+
+<% if (fromAdmin && isHR && !isHRHR && ticket.status !== 'closed') { %>
+<script>
+(function () {
+  var ticketId = <%= ticket.id %>;
+  var locked = <%= lockBlocked ? 'true' : 'false' %>;
+  var bannerBlocked = document.getElementById('mrb-lock-banner');
+  var bannerHeld = document.getElementById('mrb-lock-held-banner');
+
+  function setLocked(blocked, name) {
+    locked = blocked;
+    document.body.classList.toggle('mrb-locked', blocked);
+    if (bannerBlocked) bannerBlocked.hidden = !blocked;
+    if (bannerHeld) bannerHeld.hidden = blocked;
+    if (blocked && name && bannerBlocked) {
+      var b = bannerBlocked.querySelector('strong');
+      if (b) b.textContent = name;
+    }
+  }
+
+  function send(action) {
+    return fetch('/admin/tickets/' + ticketId + '/lock', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: action }),
+      cache: 'no-store',
+      credentials: 'same-origin'
+    }).then(function (r) {
+      return r.json().then(function (data) { return { status: r.status, data: data }; });
+    }).catch(function () { return { status: 0, data: null }; });
+  }
+
+  function acquire() {
+    send('acquire').then(function (r) {
+      if (r.status === 409) {
+        setLocked(true, r.data && r.data.heldByName ? r.data.heldByName : null);
+        setTimeout(acquire, 5000);
+      } else if (r.data && r.data.ok) {
+        setLocked(false);
+      }
+    });
+  }
+
+  setInterval(function () { if (!locked) send('ping'); }, 30000);
+  window.addEventListener('pagehide', function () {
+    navigator.sendBeacon('/admin/tickets/' + ticketId + '/lock?action=release');
+  });
+
+  acquire();
+})();
+</script>
+<% } %>
 
 <%- include('partials/footer') %>

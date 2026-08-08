@@ -297,6 +297,23 @@ function findMail(subjectPart) {
   r = await get(ticketUrl, hrCookie);
   ok('HR darf fremdes Ticket sehen', r.status === 200);
 
+  // Write-Lock: nur ein Bearbeiter darf gleichzeitig in einem Ticket eintragen
+  const hr2Id = db.prepare("INSERT INTO users (discord_id, discord_username, username, role, status) VALUES ('600','hr2','HR2','hr','active')").run().lastInsertRowid;
+  const hr2Cookie = await cookieFor(hr2Id);
+
+  r = await postJson(`/admin/tickets/${ticketId}/lock`, { action: 'acquire' }, hrCookie);
+  ok('Bearbeiter erhaelt Write-Lock', r.status === 200 && JSON.parse(r.body).ok === true, `Status ${r.status}`);
+  r = await postJson(`/admin/tickets/${ticketId}/lock`, { action: 'acquire' }, hr2Cookie);
+  ok('Lock: zweiter Bearbeiter blockiert (409)', r.status === 409, `Status ${r.status}`);
+  r = await post(ticketUrl + '/message', { body: 'Blockierte Eingabe' }, hr2Cookie);
+  const blockedMsgCount = db.prepare("SELECT COUNT(*) AS c FROM messages WHERE ticket_id = ? AND body = 'Blockierte Eingabe'").get(ticketId).c;
+  ok('Lock: blockierte Eingabe wird nicht gespeichert', r.status === 302 && blockedMsgCount === 0, `count=${blockedMsgCount}`);
+  r = await postJson(`/admin/tickets/${ticketId}/lock`, { action: 'release' }, hrCookie);
+  ok('Bearbeiter gibt Write-Lock ab', r.status === 200 && JSON.parse(r.body).ok === true, `Status ${r.status}`);
+  r = await postJson(`/admin/tickets/${ticketId}/lock`, { action: 'acquire' }, hr2Cookie);
+  ok('Lock: nach Freigabe kann zweiter Bearbeiter uebernehmen', r.status === 200 && JSON.parse(r.body).ok === true, `Status ${r.status}`);
+  await postJson(`/admin/tickets/${ticketId}/lock`, { action: 'release' }, hr2Cookie);
+
   // HR claimt das Ticket -> nur der Claimer darf es bearbeiten
   r = await post(`/admin/tickets/${ticketId}/claim`, {}, hrCookie);
   ok('HR claimt Ticket', r.status === 302 && r.location === ticketUrl);
@@ -306,6 +323,8 @@ function findMail(subjectPart) {
 
   r = await get(ticketUrl, hrCookie);
   ok('Bearbeiter sieht "Freigeben"-Button nach Übernahme', r.body.includes('Freigeben'), 'Freigeben fehlt');
+  r = await get(ticketUrl, hrhrCookie);
+  ok('Jeder Bearbeiter sieht "Zum Schließen Freigeben"-Button', r.body.includes('Zum Schließen Freigeben'), 'Zum Schließen Freigeben fehlt');
 
   r = await post(ticketUrl + '/message', { body: 'HR-HR versucht zu antworten' }, hrhrCookie);
   ok('Geclaimt: anderer HR darf nicht antworten (403)', r.status === 403);
@@ -386,14 +405,15 @@ function findMail(subjectPart) {
   const reopened = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId);
   ok('Reopen: Status open', reopened.status === 'open');
 
-  // Inhaber: ohne Freigabe-Status kommt eine Vorwarnung (Ticket bleibt offen),
-  // erst nach Bestätigung (force=1) wird geschlossen.
+  // Inhaber: Schließen ist nur möglich, wenn der Bearbeiter das Ticket zur
+  // Freigabe vorgelegt hat (Status "release"). Ohne Freigabe bleibt es offen.
   r = await post(ticketUrl + '/close', {}, hrhrCookie);
   const afterWarn = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId);
-  ok('Inhaber: Schliessen ohne Freigabe -> Vorwarnung, Ticket bleibt offen', r.status === 302 && afterWarn.status === 'open', `status=${afterWarn.status}`);
-  r = await post(ticketUrl + '/close', { force: '1' }, hrhrCookie);
-  const instantClosed = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId);
-  ok('Inhaber: nach Bestaetigung (force) geschlossen', r.status === 302 && instantClosed.status === 'closed', `status=${instantClosed.status}`);
+  ok('Inhaber: Schliessen ohne Freigabe-Status abgelehnt, Ticket bleibt offen', r.status === 302 && afterWarn.status === 'open', `status=${afterWarn.status}`);
+  db.prepare("UPDATE tickets SET status = 'release' WHERE id = ?").run(ticketId);
+  r = await post(ticketUrl + '/close', {}, hrhrCookie);
+  const closedAfterRelease = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId);
+  ok('Inhaber: schliesst Ticket bei Freigabe-Status', r.status === 302 && closedAfterRelease.status === 'closed', `status=${closedAfterRelease.status}`);
 
   // Geschlossene Tickets dürfen nicht mehr freigegeben werden
   r = await post(`/admin/tickets/${ticketId}/release`, {}, hrCookie);
@@ -402,6 +422,16 @@ function findMail(subjectPart) {
 
   r = await post(ticketUrl + '/reopen', {}, hrhrCookie);
   ok('Inhaber: wieder geoeffnet', r.status === 302);
+  const reopened2 = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId);
+  ok('Reopen: Status open', reopened2.status === 'open');
+
+  // Manueller Statuswechsel durch Bearbeiter
+  r = await post(`/admin/tickets/${ticketId}/status`, { status: 'pending' }, hrCookie);
+  const manStatus = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId);
+  ok('Bearbeiter setzt Status manuell (In Bearbeitung)', r.status === 302 && manStatus.status === 'pending', `status=${manStatus.status}`);
+  r = await post(`/admin/tickets/${ticketId}/status`, { status: 'open' }, hrCookie);
+  const manStatus2 = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId);
+  ok('Bearbeiter setzt Status manuell (Offen)', r.status === 302 && manStatus2.status === 'open', `status=${manStatus2.status}`);
 
   // ==================================================================
   // 6) Überfälligkeit, CSV, QuickJump, Admin-Suche
