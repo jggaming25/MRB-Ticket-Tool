@@ -17,12 +17,10 @@
       <% if (user) { %>
         <nav class="nav">
           <a class="nav-link <%= currentPath === '/' ? 'active' : '' %>" href="/">Home</a>
+          <a class="nav-link <%= currentPath.startsWith('/account/settings') ? 'active' : '' %>" href="/account/settings">Einstellungen</a>
           <% if (isHR) { %>
             <a class="nav-link <%= currentPath === '/dashboard' ? 'active' : '' %>" href="/dashboard">Meine Tickets</a>
             <a class="nav-link <%= currentPath.startsWith('/tickets/new') ? 'active' : '' %>" href="/tickets/new">Neues Ticket</a>
-            <% if (isRoot) { %>
-              <a class="nav-link <%= currentPath.startsWith('/account/settings') ? 'active' : '' %>" href="/account/settings">Einstellungen</a>
-            <% } %>
             <a class="nav-link <%= currentPath === '/admin' ? 'active' : '' %>" href="/admin">Alle Tickets</a>
             <% if (canStaffLinks) { %>
               <div class="nav-dropdown">
@@ -83,33 +81,49 @@
         (function () {
           var isRootUser = <%= user && isRoot(user) ? 'true' : 'false' %>;
           var shown = false;
-          function playAlarm() {
+          var sirenState = null;
+          // Endlos-Sirene (lauter): wechselt 620/880 Hz, bis stopSiren() aufgerufen wird.
+          function startSiren() {
+            if (sirenState) return;
             try {
               var ctx = new (window.AudioContext || window.webkitAudioContext)();
               var osc = ctx.createOscillator();
               var gain = ctx.createGain();
               osc.type = 'sawtooth';
-              gain.gain.setValueAtTime(0.12, ctx.currentTime);
+              gain.gain.value = 0.25;
               osc.connect(gain);
               gain.connect(ctx.destination);
-              var t0 = ctx.currentTime;
-              for (var i = 0; i < 8; i++) {
-                osc.frequency.setValueAtTime(620, t0 + i * 0.3);
-                osc.frequency.setValueAtTime(880, t0 + i * 0.3 + 0.15);
+              var t = ctx.currentTime + 0.05;
+              var i = 0;
+              function loop() {
+                if (!sirenState) return;
+                osc.frequency.setValueAtTime(i % 2 === 0 ? 620 : 880, t);
+                t += 0.3;
+                i++;
+                setTimeout(loop, 280);
               }
-              osc.start(t0);
-              osc.stop(t0 + 2.5);
+              osc.start();
+              loop();
+              sirenState = { ctx: ctx, osc: osc, gain: gain };
+            } catch (e) {}
+          }
+          function stopSiren() {
+            if (!sirenState) return;
+            try {
+              var s = sirenState;
+              sirenState = null;
+              s.osc.stop();
+              s.ctx.close();
             } catch (e) {}
           }
           function check() {
             fetch('/api/status', { cache: 'no-store' })
               .then(function (r) { return r.json(); })
               .then(function (s) {
-                if (!s || !s.lockdown || !s.lockdown.enabled) return;
-                if (shown) return;
-                shown = true;
-                playAlarm();
-                if (isRootUser) return;
+                var enabled = !!(s && s.lockdown && s.lockdown.enabled);
+                if (!enabled) { stopSiren(); return; }
+                startSiren();
+                if (shown || isRootUser) return;
                 var msg = s.lockdown.message || 'Der Zugriff wurde für alle Bearbeiter gesperrt.';
                 var ov = document.createElement('div');
                 ov.id = 'it-alarm-overlay';

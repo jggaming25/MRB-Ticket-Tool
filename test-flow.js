@@ -243,6 +243,10 @@ function findMail(subjectPart) {
 
   r = await get('/dashboard', userCookie);
   ok('Normaler Nutzer: Dashboard erreichbar', r.status === 200 && r.body.includes('Meine Tickets'));
+  r = await get('/account/settings', userCookie);
+  ok('Normaler Nutzer: eigene Einstellungen sichtbar + einstellbar', r.status === 200 && r.body.includes('Kontoeinstellungen') && r.body.includes('Benachrichtigungen') && r.body.includes('Account') && r.body.includes('Einstellungen speichern') && !r.body.includes('Admin-Optionen'));
+  r = await get('/', userCookie);
+  ok('Normaler Nutzer: Einstellungen im Menue', r.status === 200 && r.body.includes('href="/account/settings"') && r.body.includes('>Einstellungen<'));
   r = await get('/admin', userCookie);
   ok('Normaler Nutzer: /admin verboten (403)', r.status === 403);
   r = await get('/admin/accounts', userCookie);
@@ -689,9 +693,9 @@ function findMail(subjectPart) {
   r = await get('/dashboard', lockUser);
   ok('IT-Alarm: nicht-Inhaber wird abgemeldet', r.status === 302 && r.location === '/login?locked=1');
   r = await get('/login?locked=1');
-  ok('IT-Alarm: Login-Seite zeigt Sperrmeldung', r.body.includes('Wegen Wartung') && r.body.includes('IT-Alarm'));
+  ok('IT-Alarm: Login-Seite zeigt Sperrmeldung + Endlos-Sirene', r.body.includes('Wegen Wartung') && r.body.includes('IT-Alarm') && r.body.includes('startSiren'));
   r = await get('/dashboard', hrhrCookie);
-  ok('IT-Alarm: Inhaber hat weiterhin Zugriff + hoert den Alarmton', r.status === 200 && r.body.includes('Meine Tickets') && r.body.includes('isRootUser = true') && r.body.includes('playAlarm'), `${r.status}`);
+  ok('IT-Alarm: Inhaber hat weiterhin Zugriff + hoert die Endlos-Sirene', r.status === 200 && r.body.includes('Meine Tickets') && r.body.includes('isRootUser = true') && r.body.includes('startSiren') && r.body.includes('stopSiren'), `${r.status}`);
   r = await post('/account/settings/admin/lockdown', { action: 'disable' }, hrhrCookie);
   ok('IT-Alarm: durch Inhaber beendet', r.status === 302);
   r = await get('/api/status');
@@ -699,7 +703,7 @@ function findMail(subjectPart) {
   ok('API-Status: nach Beenden wieder offen', statusJson.lockdown && statusJson.lockdown.enabled === false);
   lockUser = await discordLogin('lockuser', 'LockUser', 'lock@example.com');
   r = await get('/dashboard', lockUser);
-  ok('IT-Alarm: Vollbild-Overlay-Script fuer eingeloggte Bearbeiter', r.status === 200 && r.body.includes('it-alarm-overlay') && r.body.includes('/api/status'));
+  ok('IT-Alarm: Vollbild-Overlay-Script fuer eingeloggte Bearbeiter', r.status === 200 && r.body.includes('it-alarm-overlay') && r.body.includes('/api/status') && r.body.includes('startSiren'));
 
   // Nicht-Inhaber darf Admin-Optionen nicht nutzen
   r = await post('/account/settings/admin/restart', {}, userCookie);
