@@ -633,13 +633,16 @@ function findMail(subjectPart) {
   ok('Push: Unsubscribe ok', r.status === 200 && r.body.includes('ok'));
 
   // Discord-Rollen steuern den Zugriff auf "Interne Links"
+  // Nav ist fuer normale Nutzer auf "Home" reduziert -> kein "Interne Links"-Menue,
+  // aber die Tool-Kacheln auf der Home-Seite bleiben bei passender Discord-Rolle sichtbar.
   r = await get('/', userCookie);
-  ok('Nutzer ohne Discord-Rolle: keine internen Links', !r.body.includes('Interne Links'));
+  ok('Nutzer: keine internen Links im Menue', !r.body.includes('Interne Links'));
   const allowedRole = config.staffDiscordRoleIds && config.staffDiscordRoleIds[0];
-  if (allowedRole) {
+  const firstStaffLabel = config.staffLinks && config.staffLinks[0] && config.staffLinks[0].label;
+  if (allowedRole && firstStaffLabel) {
     db.prepare('UPDATE users SET discord_roles = ? WHERE id = ?').run(allowedRole, normalUser.id);
     r = await get('/', userCookie);
-    ok('Nutzer mit Discord-Rolle: interne Links sichtbar', r.body.includes('Interne Links'));
+    ok('Nutzer mit Discord-Rolle: interne Link-Kachel sichtbar (kein Menue)', r.body.includes(firstStaffLabel) && !r.body.includes('Interne Links'));
   }
 
   // Ohne Login: Einstellungen nicht erreichbar
