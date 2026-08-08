@@ -554,6 +554,15 @@ function findMail(subjectPart) {
   ok('Audit-Log: leere Aktion zeigt Fallback statt nichts', r.body.includes('Unbekannt'), 'Unbekannt fehlt');
   r = await get('/admin/logs', hrhrCookie);
   ok('Audit-Log-Seite: leere Aktion zeigt Fallback', r.body.includes('Unbekannt'));
+  r = await get('/admin/logs', hrhrCookie);
+  const nowMonth = new Date().toISOString().slice(0, 7);
+  ok('Audit-Log: Monats- und Durch-Dropdown vorhanden', r.body.includes('Monat') && r.body.includes('Durch') && r.body.includes('Alle Monate') && r.body.includes('Alle Nutzer'));
+  r = await get(`/admin/logs?month=${nowMonth}`, hrhrCookie);
+  ok('Audit-Log: Monatsfilter liefert Eintraege (aktueller Monat)', r.status === 200 && (r.body.includes('Ticket-Aktionen') || r.body.includes('Konto-Aktionen')));
+  r = await get('/admin/logs?month=1999-01', hrhrCookie);
+  ok('Audit-Log: Monat ohne Eintraege zeigt leere Listen', r.status === 200 && r.body.includes('Noch keine Ticket-Aktionen') && r.body.includes('Noch keine Konto-Aktionen'));
+  r = await get(`/admin/logs?actor=${hrhrUser.id}`, hrhrCookie);
+  ok('Audit-Log: Durch-Filter (Dropdown-Wert) liefert Eintraege', r.status === 200 && r.body.includes(`value="${hrhrUser.id}"`));
 
   // Aktionen-Backfill: Leere Aktionen werden beim Start aus Details/Begruendung rekonstruiert
   db.prepare("INSERT INTO account_logs (account_id, actor_id, action, reason) VALUES (?, ?, '', 'IT-Alarm gesetzt.')").run(normalUser.id, hrhrUser.id);

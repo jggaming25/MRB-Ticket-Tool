@@ -31,17 +31,22 @@
         </select>
       </div>
       <div class="form-group">
-        <label for="days">Zeitraum</label>
-        <select name="days" id="days">
-          <option value="0" <%= String(days) === '0' ? 'selected' : '' %>>Gesamt</option>
-          <option value="1" <%= String(days) === '1' ? 'selected' : '' %>>Letzte 24 Std.</option>
-          <option value="7" <%= String(days) === '7' ? 'selected' : '' %>>Letzte 7 Tage</option>
-          <option value="30" <%= String(days) === '30' ? 'selected' : '' %>>Letzte 30 Tage</option>
+        <label for="month">Monat</label>
+        <select name="month" id="month">
+          <option value="all" <%= month === 'all' ? 'selected' : '' %>>Alle Monate</option>
+          <% months.forEach((m) => { %>
+            <option value="<%= m.value %>" <%= month === m.value ? 'selected' : '' %>><%= m.label %></option>
+          <% }) %>
         </select>
       </div>
       <div class="form-group grow">
-        <label for="user">Nutzer</label>
-        <input type="text" name="user" id="user" placeholder="Name / Discord-Username" value="<%= userQuery %>">
+        <label for="actor">Durch</label>
+        <select name="actor" id="actor">
+          <option value="all" <%= actor === 'all' ? 'selected' : '' %>>Alle Nutzer</option>
+          <% actors.forEach((u) => { %>
+            <option value="<%= u.value %>" <%= actor === u.value ? 'selected' : '' %>><%= u.label %></option>
+          <% }) %>
+        </select>
       </div>
       <div class="form-group filter-actions">
         <button type="submit" class="btn btn-primary">Filtern</button>

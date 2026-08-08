@@ -1579,11 +1579,8 @@ app.get('/admin/accounts', requireRoot, (req, res) => {
 app.get('/admin/logs', requireRoot, (req, res) => {
   const filter = req.query.filter || 'all';
   const action = req.query.action || 'all';
-  const userQuery = String(req.query.user || '').trim();
-  const days = Math.max(0, Number(req.query.days) || 0);
-  const since = days > 0 ? new Date(Date.now() - days * 24 * 3600 * 1000).toISOString() : null;
-  const sinceSql = since ? ' AND l.created_at >= ?' : '';
-  const userLike = userQuery ? `%${userQuery}%` : null;
+  const actor = String(req.query.actor || 'all').trim();
+  const month = String(req.query.month || 'all').trim();
 
   let accountLogs = [];
   let ticketLogs = [];
@@ -1592,18 +1589,15 @@ app.get('/admin/logs', requireRoot, (req, res) => {
     const where = [];
     const p = [];
     if (action !== 'all' && action !== 'ticket') { where.push('l.action = ?'); p.push(action); }
-    if (userLike) {
-      where.push('(a.username LIKE ? OR a.global_name LIKE ? OR ar.username LIKE ? OR ar.global_name LIKE ?)');
-      p.push(userLike, userLike, userLike, userLike);
-    }
-    if (since) p.push(since);
+    if (actor !== 'all') { where.push('l.actor_id = ?'); p.push(Number(actor) || 0); }
+    if (month !== 'all') { where.push("strftime('%Y-%m', l.created_at) = ?"); p.push(month); }
     accountLogs = normalizeLogRows(db.prepare(`
       SELECT l.*, a.username AS account_name, a.global_name AS account_global,
              ar.username AS actor_name, ar.global_name AS actor_global
       FROM account_logs l
       LEFT JOIN users a ON a.id = l.account_id
       LEFT JOIN users ar ON ar.id = l.actor_id
-      WHERE ${where.length ? where.join(' AND ') : '1=1'}${sinceSql}
+      WHERE ${where.length ? where.join(' AND ') : '1=1'}
       ORDER BY l.id DESC LIMIT 300
     `).all(...p));
   }
@@ -1612,17 +1606,14 @@ app.get('/admin/logs', requireRoot, (req, res) => {
     const where = [];
     const p = [];
     if (action !== 'all' && action !== 'account') { where.push('l.action = ?'); p.push(action); }
-    if (userLike) {
-      where.push('(ar.username LIKE ? OR ar.global_name LIKE ?)');
-      p.push(userLike, userLike);
-    }
-    if (since) p.push(since);
+    if (actor !== 'all') { where.push('l.actor_id = ?'); p.push(Number(actor) || 0); }
+    if (month !== 'all') { where.push("strftime('%Y-%m', l.created_at) = ?"); p.push(month); }
     ticketLogs = normalizeLogRows(db.prepare(`
       SELECT l.*, t.number AS ticket_number, ar.username AS actor_name, ar.global_name AS actor_global
       FROM ticket_logs l
       LEFT JOIN tickets t ON t.id = l.ticket_id
       LEFT JOIN users ar ON ar.id = l.actor_id
-      WHERE ${where.length ? where.join(' AND ') : '1=1'}${sinceSql}
+      WHERE ${where.length ? where.join(' AND ') : '1=1'}
       ORDER BY l.id DESC LIMIT 300
     `).all(...p));
   }
@@ -1633,14 +1624,37 @@ app.get('/admin/logs', requireRoot, (req, res) => {
     .all().map((r) => r.action || r.ACTION).filter((a) => a && a.trim() && a !== 'unbekannt')
     .map((a) => ({ value: a, label: logActionLabel(a) }));
 
+  // Monate (absteigend) für das Dropdown, deutsch beschriftet
+  const months = db.prepare(`
+    SELECT DISTINCT strftime('%Y-%m', created_at) AS m FROM (
+      SELECT created_at FROM account_logs
+      UNION ALL SELECT created_at FROM ticket_logs
+    ) WHERE created_at IS NOT NULL ORDER BY m DESC
+  `).all().map((r) => {
+    const [y, mo] = r.m.split('-');
+    const date = new Date(Date.UTC(Number(y), Number(mo) - 1, 1));
+    return { value: r.m, label: date.toLocaleDateString('de-DE', { month: 'long', year: 'numeric' }) };
+  });
+
+  // Ausführende Nutzer ("Durch") für das Dropdown
+  const actors = db.prepare(`
+    SELECT DISTINCT u.id, u.username, u.global_name FROM (
+      SELECT actor_id AS id FROM account_logs WHERE actor_id IS NOT NULL
+      UNION SELECT actor_id AS id FROM ticket_logs WHERE actor_id IS NOT NULL
+    ) x JOIN users u ON u.id = x.id
+    ORDER BY COALESCE(NULLIF(u.global_name, ''), u.username) COLLATE NOCASE
+  `).all().map((u) => ({ value: String(u.id), label: u.global_name || u.username }));
+
   res.render('admin-logs', {
     title: 'Audit-Log',
     accountLogs,
     ticketLogs,
     filter,
     action,
-    userQuery,
-    days,
+    actor,
+    month,
+    months,
+    actors,
     actions,
   });
 });
