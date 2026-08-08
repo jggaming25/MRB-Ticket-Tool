@@ -20,8 +20,8 @@ module.exports = {
     heroTitle: 'Mitteldeutsche Regionalbahn',
     heroSubtitle: 'Unser Roblox-Zugprojekt',
     heroText:
-      'Wir bauen die Mitteldeutsche Regionalbahn in Roblox nach – von der Fahrzeugausstattung über ' +
-      'den Fahrplan bis zum Bahnbetrieb. Dieses Ticketsystem ist der zentrale Anlaufpunkt für ' +
+      'Wir sind ein Fiktives Shift Game was sich noch in Entwicklung befindet. ' +
+      'Vom Fahrplan bis zum Stellwerk. ' +
       'Feedback, Fehlermeldungen und Anfragen zu unserem Projekt.',
     // Hinweis auf der Startseite für noch nicht eingeloggte Besucher.
     heroHint:
@@ -32,7 +32,7 @@ module.exports = {
         title: 'Über das Projekt',
         text:
           'Die Mitteldeutsche Regionalbahn bringt den Nahverkehr nach Roblox: detailgetreue Triebzüge, ' +
-          'Bahnhöfe und ein realistischer Fahrbetrieb. Egal ob du als Fahrgast mitspielen oder uns als ' +
+          'Bahnhöfe und ein realistisch / Fiktiver Fahrbetrieb. Egal ob du als Fahrgast mitspielen oder uns als ' +
           'Mitarbeiter unterstützen möchtest – hier erfährst du alles.',
       },
       {
@@ -96,16 +96,18 @@ module.exports = {
   // Tickets
   // ---------------------------------------------------------------------------
   // Kategorien, die der Ticket-Eroeffner beim Erstellen auswaehlen kann.
-  categories: ['Allgemein', 'Account', 'Bug', 'Zahlung', 'Projekt', 'Sonstiges'],
+  categories: ['Allgemein', 'Account', 'Bug', 'Player Report', 'Sonstiges'],
 
   // Vordefinierte "naechste Aktionen", die der Bearbeiter beim Festlegen der
   // Faelligkeit auswaehlen kann.
   nextActions: [
-    'Rückfrage an den Kunden',
+    'Rückfrage an den User',
     'Problem beheben',
     'Dokumentation erstellen',
-    'Externen Anbieter kontaktieren',
+    'Informationsweitergabe Intern',
     'Lösung prüfen',
+    'Anliegen Prüfen'
+    ,"Ticket schließen",
   ],
 
   // Fälligkeit: Nach jeder Bearbeitung durch den Support wird die Fälligkeit um
