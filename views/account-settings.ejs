@@ -71,23 +71,23 @@
       <h2>Admin-Optionen</h2>
       <p class="muted">Nur für festgelegte Inhaber sichtbar.</p>
 
-      <h3>Zugriff für alle sperren</h3>
+      <h3>IT-Alarm</h3>
       <% if (adminData.lockdown) { %>
         <p class="hint">
-          Der Zugriff ist derzeit <strong>gesperrt</strong>: Nur dein Account kann sich einloggen.
-          Meldung: „<%= adminData.lockdown.message || adminData.lockdownDefaultMsg %>"
+          IT-Alarm ist <strong>aktiv</strong>: „<%= adminData.lockdown.message || adminData.lockdownDefaultMsg %>" – der
+          Zugriff ist <strong>gesperrt</strong>, nur dein Account kann sich einloggen.
         </p>
         <form method="post" action="/account/settings/admin/lockdown" class="inline-form">
           <input type="hidden" name="action" value="disable">
-          <button type="submit" class="btn btn-ghost" data-confirm="Zugriff für alle Bearbeiter wieder freigeben?">Zugriff wieder freigeben</button>
+          <button type="submit" class="btn btn-ghost" data-confirm="IT-Alarm beenden und Zugriff für alle Bearbeiter wieder freigeben?">IT-Alarm beenden &amp; Zugriff freigeben</button>
         </form>
       <% } else { %>
-        <p class="hint">Sperrt den Zugriff für alle Bearbeiter (ausgenommen dein Account). Alle anderen werden sofort ausgeloggt und können sich nicht mehr anmelden.</p>
+        <p class="hint">Löst einen IT-Alarm aus: Alle eingeloggten Bearbeiter sehen sofort eine rote Vollbild-Meldung „IT-Alarm: &lt;Text&gt;" mit Alarmton und werden ausgeloggt. Sie können sich erst wieder anmelden, wenn du den IT-Alarm beendest.</p>
         <form method="post" action="/account/settings/admin/lockdown" class="admin-form">
           <input type="hidden" name="action" value="enable">
-          <label class="small">Meldung (optional)</label>
+          <label class="small">Text für die rote Meldung</label>
           <input type="text" name="message" class="input" value="<%= adminData.lockdownDefaultMsg %>" placeholder="Der Zugriff auf das System wurde gerade für alle Bearbeiter gesperrt.">
-          <button type="submit" class="btn btn-danger" data-confirm="Wirklich den Zugriff für ALLE Bearbeiter sperren?">Zugriff für alle sperren</button>
+          <button type="submit" class="btn btn-danger" data-confirm="Wirklich den IT-Alarm auslösen? Alle eingeloggten Bearbeiter werden abgemeldet.">IT-Alarm auslösen &amp; Zugriff sperren</button>
         </form>
       <% } %>
 
@@ -95,25 +95,18 @@
 
       <h3>Meldungen</h3>
       <% if (adminData.alarm && adminData.alarm.active) { %>
-        <p class="hint">
-          Meldung ist <strong>aktiv</strong>: „<%= adminData.alarm.text %>"
-          <% if (adminData.alarmFired) { %>
-            – Zugriff ist <strong>gesperrt</strong>, alle anderen wurden abgemeldet.
-          <% } else { %>
-            – alle Bearbeiter werden gleich automatisch abgemeldet.
-          <% } %>
-        </p>
+        <p class="hint">Meldung ist <strong>aktiv</strong>: „<%= adminData.alarm.text %>" – sie wird oben auf allen Seiten gelb angezeigt (ohne Ton).</p>
         <form method="post" action="/account/settings/admin/alarm" class="inline-form">
           <input type="hidden" name="action" value="clear">
-          <button type="submit" class="btn btn-ghost">Meldung aufheben &amp; Zugriff freigeben</button>
+          <button type="submit" class="btn btn-ghost">Meldung entfernen</button>
         </form>
       <% } else { %>
-        <p class="hint">Setzt eine Meldung mit Alarmton für alle eingeloggten Bearbeiter. Nach 7,5&nbsp;Sekunden werden automatisch alle außer dir ausgeloggt und können sich erst wieder anmelden, wenn die Meldung aufgehoben ist.</p>
+        <p class="hint">Zeigt oben auf allen Seiten einen gelben Hinweis-Banner für alle eingeloggten Nutzer – ohne Ton, ohne Sperre.</p>
         <form method="post" action="/account/settings/admin/alarm" class="admin-form">
           <input type="hidden" name="action" value="set">
           <label class="small">Meldungstext *</label>
-          <input type="text" name="text" class="input" required placeholder="z. B. Achtung: Notfall – alle abmelden">
-          <button type="submit" class="btn btn-danger" data-confirm="Wirklich alle Bearbeiter abmelden? Nach 7,5 s werden alle außer dir ausgeloggt.">Meldung senden &amp; sperren</button>
+          <input type="text" name="text" class="input" required placeholder="z. B. Achtung: Wartungsarbeiten am Freitag 18–20 Uhr">
+          <button type="submit" class="btn btn-primary">Meldung anzeigen</button>
         </form>
       <% } %>
 

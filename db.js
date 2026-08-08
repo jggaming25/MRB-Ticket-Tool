@@ -281,10 +281,10 @@ const LOG_ACTION_LABELS = {
   due_set: 'Fälligkeit gesetzt',
   // Konto-Aktionen
   hrhr_created: 'Inhaber angelegt',
-  lockdown_enabled: 'Zugriff gesperrt',
-  lockdown_disabled: 'Zugriff freigegeben',
-  alarm_set: 'Meldung gesetzt',
-  alarm_cleared: 'Meldung aufgehoben',
+  lockdown_enabled: 'IT-Alarm ausgelöst',
+  lockdown_disabled: 'IT-Alarm beendet',
+  alarm_set: 'Meldung angezeigt',
+  alarm_cleared: 'Meldung entfernt',
   system_restart: 'Neustart',
   backups_cleared: 'Backups gelöscht',
   disabled: 'Deaktiviert',
@@ -330,6 +330,8 @@ const TICKET_ACTION_BY_TEXT = [
 ];
 const ACCOUNT_ACTION_BY_TEXT = [
   [/HR-HR-Account|Inhaber-Account/i, 'hrhr_created'],
+  [/Meldung entfernt/i, 'alarm_cleared'],
+  [/Meldung angezeigt/i, 'alarm_set'],
   [/Meldung aufgehoben/i, 'alarm_cleared'],
   [/Meldung gesetzt/i, 'alarm_set'],
   [/IT-Alarm deaktiviert/i, 'alarm_cleared'],

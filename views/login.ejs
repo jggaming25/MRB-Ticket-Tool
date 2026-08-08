@@ -7,9 +7,27 @@
       <p class="muted">Melde dich mit deinem Discord-Konto an, um deine Tickets zu verwalten.</p>
 
       <% if (typeof lockedMsg !== 'undefined' && lockedMsg) { %>
-        <div class="alert alert-error">
-          <strong>Zugriff gesperrt:</strong> <%= lockedMsg %>
+        <div class="alert alert-error it-alarm-locked">
+          <strong>IT-Alarm – Zugriff gesperrt:</strong> <%= lockedMsg %>
         </div>
+        <script>
+          try {
+            var ctx = new (window.AudioContext || window.webkitAudioContext)();
+            var osc = ctx.createOscillator();
+            var gain = ctx.createGain();
+            osc.type = 'sawtooth';
+            gain.gain.setValueAtTime(0.12, ctx.currentTime);
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            var t0 = ctx.currentTime;
+            for (var i = 0; i < 8; i++) {
+              osc.frequency.setValueAtTime(620, t0 + i * 0.3);
+              osc.frequency.setValueAtTime(880, t0 + i * 0.3 + 0.15);
+            }
+            osc.start(t0);
+            osc.stop(t0 + 2.5);
+          } catch (e) {}
+        </script>
       <% } %>
 
       <% if (typeof error !== 'undefined' && error) { %>

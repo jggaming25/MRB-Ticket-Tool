@@ -157,48 +157,17 @@ function getLockdown() {
   }
 }
 
-// Meldungen (ehemals "IT-Alarm"): Eine aktive Meldung zeigt für alle
-// eingeloggten Nutzer einen Alarm-Banner mit Ton. Nach Ablauf der Frist
-// (7,5 s) werden alle außer dem Inhaber ausgeloggt und am Login blockiert,
-// bis die Meldung aufgehoben wird.
-const ALARM_GRACE_MS = 7500;
-
+// Meldungen (früher "IT-Alarm"): Einfacher Hinweis-Banner (gelb) oben auf allen
+// Seiten für alle eingeloggten Nutzer – ohne Ton, ohne Sperre.
 function getAlarm() {
   const raw = getSetting('it_alarm');
   if (!raw) return null;
   try {
     const alarm = JSON.parse(raw);
-    return alarm && alarm.active ? alarm : null;
+    return alarm && alarm.text ? alarm : null;
   } catch {
     return null;
   }
-}
-
-// Eine Meldung ist "ausgelöst", wenn sie länger als die Frist aktiv ist:
-// dann verlieren alle außer dem Inhaber den Zugriff.
-function alarmFired(alarm) {
-  if (!alarm || !alarm.active) return false;
-  const at = new Date(alarm.set_at).getTime();
-  if (Number.isNaN(at)) return true;
-  return Date.now() - at >= ALARM_GRACE_MS;
-}
-
-// Während der Frist läuft nur der Alarm (Banner + Ton) und alle haben noch
-// Zugriff. Nach Ablauf werden alle außer dem Inhaber ausgeloggt (Session
-// zerstört) und auf die Login-Seite mit Meldung geleitet. Öffentliche Seiten
-// (Startseite, Login, statische Dateien) bleiben erreichbar, damit die
-// Meldung sichtbar ist.
-function alarmGuard(req, res, next) {
-  if (req.path === '/healthz') return next();
-  const alarm = getAlarm();
-  if (!alarm || !alarmFired(alarm)) return next();
-  if (isRoot(req.user)) return next();
-  if (req.path === '/' || req.path === '/login' || req.path === '/sw.js' ||
-      req.path === '/impressum' || req.path === '/datenschutz' || req.path === '/api/status' ||
-      req.path.startsWith('/auth/') || req.path.startsWith('/static/')) return next();
-  req.session.destroy(() => {});
-  res.locals.user = null;
-  return res.redirect('/login?locked=1&src=meldung');
 }
 
 // Zugriff für alle sperren (außer dem Inhaber): Sobald der Lockdown aktiv
@@ -248,12 +217,9 @@ module.exports = {
   requireHRHR,
   requireRoot,
   onboardingGuard,
-  alarmGuard,
   lockdownGuard,
   getLockdown,
   getAlarm,
-  alarmFired,
-  ALARM_GRACE_MS,
   isHR,
   isHRHR,
   isRoot,
