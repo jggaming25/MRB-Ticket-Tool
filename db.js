@@ -249,6 +249,16 @@ function migrateUsers() {
       UNIQUE (user_id, endpoint)
     );
   `);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS backups (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      kind         TEXT NOT NULL DEFAULT 'auto',
+      created_by   INTEGER,
+      created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+      size         INTEGER NOT NULL DEFAULT 0,
+      data         TEXT NOT NULL
+    );
+  `);
 }
 migrateUsers();
 migrateTickets();

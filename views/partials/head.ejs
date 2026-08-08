@@ -61,3 +61,14 @@
     <% if (flash) { %>
       <div class="alert <%= flash.type === 'error' ? 'alert-error' : 'alert-success' %>"><%= flash.text %></div>
     <% } %>
+    <% if (itAlarm) { %>
+      <div class="alarm-banner" data-alarm="1">
+        <strong>⚠ IT-Alarm:</strong> <%= itAlarm.text %>
+      </div>
+    <% } %>
+    <% if (lockdown && user && isRoot(user)) { %>
+      <div class="alarm-banner lockdown">
+        <strong>Zugriff gesperrt:</strong> <%= lockdown.message || 'Der Zugriff wurde für alle Bearbeiter gesperrt.' %>
+        <em class="alarm-sub">(Nur du kannst dich derzeit einloggen – deaktivieren unter Einstellungen → Admin-Optionen)</em>
+      </div>
+    <% } %>

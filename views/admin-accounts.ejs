@@ -132,9 +132,9 @@
                               data-confirm="Konto wirklich löschen? Diese Aktion wird dem Nutzer per E-Mail mitgeteilt.">
                           <label class="small">Begründung *</label>
                           <input type="text" name="reason" required placeholder="Warum löschen?">
-                          <label class="small">Löschen am *</label>
-                          <input type="datetime-local" name="delete_at" class="input" required>
-                          <p class="hint">Datum in der Vergangenheit oder jetzt = sofort löschen.</p>
+                          <label class="small">Löschen am (leer = sofort / unbegrenzt)</label>
+                          <input type="datetime-local" name="delete_at" class="input">
+                          <p class="hint">Uhrzeit in deutscher Zeit. Freilassen = sofort löschen, bis zur manuellen Reaktivierung. Gelöschte Konten können jederzeit wieder aktiviert werden.</p>
                           <button type="submit" class="btn btn-sm btn-danger">Löschen planen</button>
                         </form>
                       <% } %>
@@ -143,6 +143,12 @@
                   </details>
                 <% } else if (u.id === myId) { %>
                   <span class="muted small">Du</span>
+                <% } else if (u.status === 'deleted') { %>
+                  <form method="post" action="/admin/accounts/<%= u.id %>/enable" class="acc-reactivate">
+                    <input type="text" name="reason" placeholder="Grund (optional)">
+                    <button type="submit" class="btn btn-sm btn-primary">Reaktivieren</button>
+                  </form>
+                  <a class="btn btn-sm btn-ghost" href="/admin/accounts/<%= u.id %>">Verlauf</a>
                 <% } else { %>
                   <span class="muted small">Gelöscht</span>
                 <% } %>

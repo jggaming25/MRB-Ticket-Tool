@@ -11,11 +11,12 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const multer = require('multer');
 
-const { db, isRemote, DB_PATH: dbPaths, nextTicketNumber, insertSystemMessage, logAccountAction, logTicketAction, addAccountNote } = require('./db');
+const { db, isRemote, DB_PATH: dbPaths, nextTicketNumber, insertSystemMessage, logAccountAction, logTicketAction, addAccountNote, getSetting, setSetting } = require('./db');
 const discord = require('./discord');
 const mailer = require('./mailer');
 const config = require('./config');
 const push = require('./push');
+const backups = require('./backups');
 const {
   loadUser,
   requireLogin,
@@ -23,6 +24,8 @@ const {
   requireHRHR,
   requireRoot,
   onboardingGuard,
+  lockdownGuard,
+  getLockdown,
   isHR,
   isHRHR,
   isRoot,
@@ -41,6 +44,40 @@ const {
 const app = express();
 const PORT = process.env.PORT || 3000;
 const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
+
+// ---------------------------------------------------------------------------
+// Deutsche Zeit (Europe/Berlin): Ein <input type="datetime-local"> liefert die
+// Uhrzeit des PCs des Planers (deutsche Zeit). Diese wird hier unabhängig von
+// der Server-Zeitzone (Render = UTC) korrekt in UTC umgerechnet – inkl. Sommer-
+// und Winterzeit.
+// ---------------------------------------------------------------------------
+function berlinOffsetMs(date) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Europe/Berlin',
+    hour12: false,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  }).formatToParts(date);
+  const map = {};
+  for (const p of parts) map[p.type] = p.value;
+  if (map.hour === '24') map.hour = '0';
+  const asUTC = Date.UTC(+map.year, +map.month - 1, +map.day, +map.hour, +map.minute, +map.second);
+  return asUTC - date.getTime();
+}
+
+function parseGermanLocal(raw) {
+  // raw: "YYYY-MM-DDTHH:MM" (Wanduhrzeit des Planers in Deutschland)
+  const date1 = new Date(raw);
+  if (Number.isNaN(date1.getTime())) return null;
+  const serverOffsetMs = -date1.getTimezoneOffset() * 60000;
+  const berlinOffset = berlinOffsetMs(date1);
+  return new Date(date1.getTime() + serverOffsetMs - berlinOffset);
+}
+
+// Aktuelle Zeit als ISO (UTC) – im Scheduler gegen die DB-Werte zu vergleichen.
+function nowUtcIso() {
+  return new Date().toISOString();
+}
 
 // Render läuft hinter einem Reverse-Proxy. Ohne "trust proxy" würde Express
 // die Proxy-IP statt der echten Client-IP sehen – der Rate-Limiter wäre nutzlos.
@@ -114,6 +151,7 @@ app.use(session({
 
 app.use(loadUser);
 app.use(onboardingGuard);
+app.use(lockdownGuard);
 
 // Flash-Nachrichten
 app.use((req, res, next) => {
@@ -141,18 +179,27 @@ app.use((req, res, next) => {
   res.locals.isRoot = (u) => isRoot(u);
   res.locals.isOverdue = isOverdue;
   res.locals.accountStatusLabel = (s) => STATUS_LABELS[s] || s;
+  res.locals.lockdown = getLockdown();
+  let itAlarm = null;
+  try { itAlarm = JSON.parse(getSetting('it_alarm') || 'null'); } catch { itAlarm = null; }
+  res.locals.itAlarm = itAlarm && itAlarm.active ? itAlarm : null;
   res.locals.fmtDate = (iso) => {
     if (!iso) return '–';
     const d = new Date(iso.endsWith('Z') ? iso : iso.replace(' ', 'T') + 'Z');
     if (Number.isNaN(d.getTime())) return iso;
-    return d.toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short' });
+    return d.toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Europe/Berlin' });
   };
   res.locals.toLocalInput = (iso) => {
     if (!iso) return '';
     const d = new Date(iso.endsWith('Z') ? iso : iso.replace(' ', 'T') + 'Z');
     if (Number.isNaN(d.getTime())) return '';
-    const pad = (n) => String(n).padStart(2, '0');
-    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Europe/Berlin',
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hour12: false,
+    }).formatToParts(d);
+    const get = (t) => (parts.find((p) => p.type === t) || {}).value || '00';
+    return `${get('year')}-${get('month')}-${get('day')}T${get('hour')}:${get('minute')}`;
   };
   next();
 });
@@ -242,6 +289,19 @@ function notifyOwnerPush(ticket, title, body) {
   }
 }
 
+// Web-Push an alle HR/HR-HR (Team + Inhaber), die Benachrichtigungen
+// aktiviert haben. excludeUserId: der Absender benachrichtigt sich nicht selbst.
+function notifyAllStaffPush(title, body, url, excludeUserId) {
+  const staff = db.prepare(`
+    SELECT id FROM users
+    WHERE role IN ('hr','hrhr') AND status = 'active' AND notify_changes = 1
+  `).all();
+  for (const s of staff) {
+    if (excludeUserId && s.id === excludeUserId) continue;
+    push.sendToUser(s.id, { title, body, url });
+  }
+}
+
 function markOverdue(ticket) {
   if (isOverdue(ticket) && ticket.status !== 'overdue') {
     db.prepare('UPDATE tickets SET status = ? WHERE id = ?').run('overdue', ticket.id);
@@ -265,38 +325,6 @@ function getHomeImages() {
     // Ordner existiert (noch) nicht -> leere Liste
   }
   return files.map((f) => config.home.imageUrlPrefix + encodeURIComponent(f));
-}
-
-// ---- Backups ---------------------------------------------------------------
-// Nur bei der lokalen Datenbank sinnvoll. Bei Turso (Remote) sichert der
-// Anbieter die Daten selbst – das Dateisystem ist dort ohnehin fluechtig.
-function runBackup() {
-  if (isRemote) {
-    console.log('[BACKUP] Turso-Datenbank: Datei-Backup uebersprungen (Turso sichert selbst).');
-    return;
-  }
-  const dir = config.backup.dir;
-  fs.mkdirSync(dir, { recursive: true });
-  const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19);
-  const target = path.join(dir, `ticketsystem-${stamp}.db`);
-  try {
-    fs.copyFileSync(dbPaths.DB_PATH, target);
-  } catch (err) {
-    console.error('Backup fehlgeschlagen:', err.message);
-    return;
-  }
-  // alte Backups aufraeumen
-  try {
-    const cutoff = Date.now() - config.backup.keepDays * 24 * 60 * 60 * 1000;
-    for (const f of fs.readdirSync(dir)) {
-      if (!f.startsWith('ticketsystem-') || !f.endsWith('.db')) continue;
-      const p = path.join(dir, f);
-      if (fs.statSync(p).mtimeMs < cutoff) fs.unlinkSync(p);
-    }
-  } catch (err) {
-    console.error('Backup-Aufräumen fehlgeschlagen:', err.message);
-  }
-  console.log(`[BACKUP] Datenbank gesichert nach ${target}`);
 }
 
 // ---- CSV-Export ------------------------------------------------------------
@@ -338,7 +366,9 @@ const fileDownloadLimiter = rateLimit({
 
 app.get('/login', (req, res) => {
   if (req.user) return res.redirect('/dashboard');
-  res.render('login', { title: 'Login' });
+  const lock = getLockdown();
+  const lockedMsg = req.query.locked ? (lock ? lock.message : null) : null;
+  res.render('login', { title: 'Login', lockedMsg });
 });
 
 app.get('/auth/discord', authLimiter, (req, res) => {
@@ -359,6 +389,20 @@ app.get('/auth/callback', authLimiter, async (req, res) => {
   try {
     const token = await discord.exchangeCode(code);
     const dUser = await discord.fetchDiscordUser(token.access_token);
+
+    // Zugriff gesperrt (Lockdown): Nur der festgelegte Inhaber kann sich
+    // einloggen, alle anderen werden mit der Meldung abgewiesen.
+    const lock = getLockdown();
+    if (lock) {
+      const isOwner = discord.isAuthorizedDiscord(dUser);
+      if (!isOwner) {
+        return res.status(403).render('error', {
+          title: 'Zugriff gesperrt',
+          message: lock.message || config.lockdownMessage,
+          code: 403,
+        });
+      }
+    }
 
     // Server-Prüfung: Der Nutzer muss Mitglied des Discord-Servers sein.
     // (DISCORD_GUILD_ID muss in .env gesetzt sein; sonst wird übersprungen.)
@@ -415,8 +459,9 @@ app.get('/auth/callback', authLimiter, async (req, res) => {
     } else {
       // Bestehendes Konto: Status pruefen
       if (user.status === 'disabled' || user.status === 'deleted') {
+        const statusText = user.status === 'deleted' ? 'Dein Konto wurde gelöscht.' : 'Dein Konto ist deaktiviert.';
         return renderError(res, 403, 'Konto gesperrt',
-          `Dein Konto ist deaktiviert.${user.disabled_reason ? ` Grund: ${user.disabled_reason}` : ''}`);
+          `${statusText}${user.disabled_reason ? ` Grund: ${user.disabled_reason}` : ''}`);
       }
       // Altbestand migrieren: Konten aus der alten E-Mail-Verifizierung
       // (pending_email) und alte Einladungs-/Setup-Konten (invited,
@@ -471,6 +516,14 @@ app.get('/account/settings', requireLogin, (req, res) => {
   res.render('account-settings', {
     title: 'Kontoeinstellungen',
     user: req.user,
+    adminData: isRoot(req.user) ? {
+      lockdown: getLockdown(),
+      lockdownDefaultMsg: config.lockdownMessage,
+      alarm: (() => { try { return JSON.parse(getSetting('it_alarm') || 'null'); } catch { return null; } })(),
+      backups: backups.listBackups(),
+      backupSlotsFree: backups.slotsFree(),
+      backupMax: backups.maxSlots(),
+    } : null,
   });
 });
 
@@ -481,6 +534,101 @@ app.post('/account/settings', requireLogin, (req, res) => {
   req.user.notify_changes = notify;
   flash(req, 'success', 'Einstellungen gespeichert.');
   res.redirect('/account/settings');
+});
+
+// ---------------------------------------------------------------------------
+// Admin-Optionen (nur festgelegte Inhaber) unter "Einstellungen"
+// ---------------------------------------------------------------------------
+
+// Zugriff für alle sperren / freigeben (ausgenommen der eigene Account)
+app.post('/account/settings/admin/lockdown', requireRoot, (req, res) => {
+  const enable = req.body.action === 'enable';
+  if (enable) {
+    const message = String(req.body.message || '').trim() || config.lockdownMessage;
+    setSetting('system_lockdown', JSON.stringify({
+      enabled: true,
+      message,
+      set_by: req.user.id,
+      set_at: new Date().toISOString(),
+    }));
+    logAccountAction(req.user.id, req.user.id, 'lockdown_enabled', 'Zugriff für alle Bearbeiter gesperrt (nur Inhaber darf einloggen).');
+    flash(req, 'success', 'Zugriff gesperrt. Alle anderen Bearbeiter wurden ausgeloggt.');
+  } else {
+    setSetting('system_lockdown', '');
+    logAccountAction(req.user.id, req.user.id, 'lockdown_disabled', 'Zugriff für Bearbeiter wieder freigegeben.');
+    flash(req, 'success', 'Zugriff wieder freigegeben.');
+  }
+  res.redirect('/account/settings');
+});
+
+// IT-Alarm: globaler Hinweis-Banner für alle eingeloggten Nutzer
+app.post('/account/settings/admin/alarm', requireRoot, (req, res) => {
+  if (req.body.action === 'set') {
+    const text = String(req.body.text || '').trim();
+    if (!text) {
+      flash(req, 'error', 'Bitte gib einen Alarm-Text ein.');
+      return res.redirect('/account/settings');
+    }
+    setSetting('it_alarm', JSON.stringify({
+      active: true,
+      text,
+      set_by: req.user.id,
+      set_at: new Date().toISOString(),
+    }));
+    logAccountAction(req.user.id, req.user.id, 'alarm_set', 'IT-Alarm gesetzt.');
+    flash(req, 'success', 'IT-Alarm aktiviert. Der Hinweis erscheint oben auf allen Seiten.');
+  } else {
+    setSetting('it_alarm', '');
+    logAccountAction(req.user.id, req.user.id, 'alarm_cleared', 'IT-Alarm deaktiviert.');
+    flash(req, 'success', 'IT-Alarm deaktiviert.');
+  }
+  res.redirect('/account/settings');
+});
+
+// Systemneustart: Prozess wird beendet (Render startet ihn neu)
+app.post('/account/settings/admin/restart', requireRoot, (req, res) => {
+  logAccountAction(req.user.id, req.user.id, 'system_restart', 'Systemneustart angefordert.');
+  flash(req, 'success', 'System wird neu gestartet …');
+  res.redirect('/account/settings');
+  setTimeout(() => {
+    console.log('Systemneustart durch Inhaber angefordert.');
+    process.exit(0);
+  }, 1500);
+});
+
+// Manuelles Backup erstellen (nur wenn Slots frei sind)
+app.post('/account/settings/admin/backups/create', requireRoot, (req, res) => {
+  const result = backups.createBackup('manual', req.user.id);
+  if (!result.ok) {
+    flash(req, 'error', `Backup nicht möglich: 0 / ${backups.maxSlots()} Slots frei. Erst aufräumen (jlg09) oder alte Backups löschen.`);
+  } else {
+    flash(req, 'success', `Backup erstellt (${backups.slotsFree()} / ${backups.maxSlots()} Slots frei).`);
+  }
+  res.redirect('/account/settings');
+});
+
+// Einzelnes Backup löschen
+app.post('/account/settings/admin/backups/:id/delete', requireRoot, (req, res) => {
+  backups.deleteBackup(req.params.id);
+  flash(req, 'success', 'Backup gelöscht.');
+  res.redirect('/account/settings');
+});
+
+// Alle Backups löschen (jlg09 kann jederzeit aufräumen)
+app.post('/account/settings/admin/backups/clear', requireRoot, (req, res) => {
+  backups.clearAllBackups();
+  logAccountAction(req.user.id, req.user.id, 'backups_cleared', 'Alle Backups manuell gelöscht.');
+  flash(req, 'success', `Alle Backups gelöscht. ${backups.maxSlots()} / ${backups.maxSlots()} Slots wieder frei.`);
+  res.redirect('/account/settings');
+});
+
+// Backup herunterladen
+app.get('/account/settings/admin/backups/:id/download', requireRoot, (req, res) => {
+  const b = backups.getBackup(req.params.id);
+  if (!b) return renderError(res, 404, 'Nicht gefunden', 'Dieses Backup existiert nicht.');
+  res.setHeader('Content-Type', 'application/json');
+  res.setHeader('Content-Disposition', `attachment; filename="mrb-backup-${b.created_at.replace(/[^0-9T:]/g, '-')}.json"`);
+  res.send(b.data);
 });
 
 // ---- Benachrichtigungen: Änderungen an sichtbaren Tickets seit Zeitpunkt ----
@@ -851,11 +999,19 @@ app.post('/tickets/:id/message', requireLogin, loadTicketFor, upload.single('att
   await notifyCustomer({ ...ticket, user_id: ticket.user_id }, ticket.subject,
     isStaff ? 'Der Support hat auf dein Ticket geantwortet.' : 'Deine Antwort wurde gespeichert.');
 
-  // Push-Benachrichtigung nur bei neuen Einträgen (und nicht an den Verfasser):
-  // mit einem kurzen Ausschnitt der Nachricht.
+  // Push-Benachrichtigungen bei neuen Einträgen: an den Besitzer (nur wenn der
+  // Support schreibt) und an alle HR/HR-HR – jeweils mit kurzem Textausschnitt.
+  const snippet = (body ? body.slice(0, 100) : '(Anhang)') + (body && body.length > 100 ? '…' : '');
+  const who = req.user.global_name || req.user.username;
   if (isStaff) {
-    notifyOwnerPush(ticket, 'Neue Nachricht',
-      (body ? body.slice(0, 100) : '(Anhang)') + (body && body.length > 100 ? '…' : ''));
+    notifyOwnerPush(ticket, 'Neue Nachricht', snippet);
+    notifyAllStaffPush(`Ticket #${String(ticket.number).padStart(4, '0')}`,
+      `Antwort von ${who}: ${snippet}`,
+      `${BASE_URL}/tickets/${ticket.id}`, req.user.id);
+  } else {
+    notifyAllStaffPush(`Ticket #${String(ticket.number).padStart(4, '0')}`,
+      `Neue Nachricht vom Kunden (${who}): ${snippet}`,
+      `${BASE_URL}/tickets/${ticket.id}`);
   }
 
   res.redirect(`/tickets/${ticket.id}#last`);
@@ -1040,6 +1196,9 @@ app.post('/admin/tickets/:id/claim', requireHR, (req, res) => {
   insertSystemMessage(ticket.id, `Ticket wurde von ${who} uebernommen.`);
   notifyOwnerPush(ticket, 'Ticket übernommen',
     `Dein Ticket wird jetzt von ${who} bearbeitet.`);
+  notifyAllStaffPush(`Ticket #${String(ticket.number).padStart(4, '0')}`,
+    `Übernommen von ${who}`,
+    `${BASE_URL}/tickets/${ticket.id}`, req.user.id);
   flash(req, 'success', 'Ticket uebernommen. Nur du kannst es jetzt bearbeiten.');
   res.redirect(`/tickets/${ticket.id}`);
 });
@@ -1141,6 +1300,9 @@ app.post('/admin/tickets/:id/release', requireHR, loadTicketFor, async (req, res
   await notifyCustomer(ticket, ticket.subject, 'Dein Ticket ist bearbeitet und wartet auf die endgültige Freigabe.');
   notifyOwnerPush(ticket, 'Freigabe',
     'Dein Ticket wurde zur Freigabe vorgelegt und wird vom Inhaber geprüft.');
+  notifyAllStaffPush(`Ticket #${String(ticket.number).padStart(4, '0')}`,
+    `Zur Freigabe vorgelegt von ${req.user.global_name || req.user.username}`,
+    `${BASE_URL}/tickets/${ticket.id}`, req.user.id);
   flash(req, 'success', 'Ticket zur Freigabe vorgelegt. Der Inhaber entscheidet über das Schließen.');
   res.redirect(`/tickets/${ticket.id}`);
 });
@@ -1164,8 +1326,8 @@ app.post('/admin/tickets/:id/due', requireHR, loadTicketFor, async (req, res) =>
     flash(req, 'error', 'Bitte ein Fälligkeits-Datum angeben.');
     return res.redirect(`/tickets/${ticket.id}`);
   }
-  const parsedDue = new Date(dueRaw);
-  if (Number.isNaN(parsedDue.getTime())) {
+  const parsedDue = parseGermanLocal(dueRaw);
+  if (!parsedDue) {
     flash(req, 'error', 'Ungültiges Fälligkeits-Datum.');
     return res.redirect(`/tickets/${ticket.id}`);
   }
@@ -1183,7 +1345,7 @@ app.post('/admin/tickets/:id/due', requireHR, loadTicketFor, async (req, res) =>
 
   logTicketAction(ticket.id, req.user.id, 'due_set', `Fälligkeit: ${due}${nextAction ? `, Nächste Aktion: ${nextAction}` : ''}`);
   insertSystemMessage(ticket.id,
-    `Fälligkeit festgelegt auf ${new Date(due).toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short' })}.` +
+    `Fälligkeit festgelegt auf ${new Date(due).toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Europe/Berlin' })}.` +
     (nextAction ? ` Nächste Aktion: ${nextAction}.` : ''));
   flash(req, 'success', 'Fälligkeit und nächste Aktion gespeichert.');
   res.redirect(`/tickets/${ticket.id}`);
@@ -1247,11 +1409,11 @@ app.get('/admin/accounts', requireRoot, (req, res) => {
 app.get('/admin/logs', requireRoot, (req, res) => {
   const filter = req.query.filter || 'all';
   const action = req.query.action || 'all';
-  const user = String(req.query.user || '').trim();
+  const userQuery = String(req.query.user || '').trim();
   const days = Math.max(0, Number(req.query.days) || 0);
   const since = days > 0 ? new Date(Date.now() - days * 24 * 3600 * 1000).toISOString() : null;
   const sinceSql = since ? ' AND l.created_at >= ?' : '';
-  const userLike = user ? `%${user}%` : null;
+  const userLike = userQuery ? `%${userQuery}%` : null;
 
   let accountLogs = [];
   let ticketLogs = [];
@@ -1304,7 +1466,7 @@ app.get('/admin/logs', requireRoot, (req, res) => {
     ticketLogs,
     filter,
     action,
-    user,
+    userQuery,
     days,
     actions,
   });
@@ -1332,8 +1494,8 @@ app.post('/admin/accounts/:id/disable', requireRoot, (req, res) => {
       flash(req, 'error', 'Bitte gib den Zeitpunkt der automatischen Freigabe an (oder wähle "Manuell").');
       return res.redirect('/admin/accounts');
     }
-    const d = new Date(raw);
-    if (Number.isNaN(d.getTime())) {
+    const d = parseGermanLocal(raw);
+    if (!d) {
       flash(req, 'error', 'Ungültiges Freigabe-Datum.');
       return res.redirect('/admin/accounts');
     }
@@ -1348,7 +1510,7 @@ app.post('/admin/accounts/:id/disable', requireRoot, (req, res) => {
 
   if (target.email) mailer.sendAccountDisabled(target.email, reason);
   logAccountAction(target.id, req.user.id, 'disabled',
-    `${reason}${disableUntil ? ` (automatische Freigabe: ${new Date(disableUntil).toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short' })})` : ' (nur manuelle Freigabe)'}`);
+    `${reason}${disableUntil ? ` (automatische Freigabe: ${new Date(disableUntil).toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Europe/Berlin' })})` : ' (nur manuelle Freigabe)'}`);
 
   flash(req, 'success', `Konto von ${target.username} deaktiviert. E-Mail wurde benachrichtigt.`);
   res.redirect('/admin/accounts');
@@ -1367,10 +1529,17 @@ app.post('/admin/accounts/:id/delete', requireRoot, (req, res) => {
   }
 
   const raw = String(req.body.delete_at || '').trim();
-  const when = raw ? new Date(raw) : new Date();
-  if (Number.isNaN(when.getTime())) {
-    flash(req, 'error', 'Ungültiges Lösch-Datum.');
-    return res.redirect('/admin/accounts');
+  let when;
+  if (raw) {
+    // Datumsangabe: Konto wird zu diesem Zeitpunkt (deutsche Zeit) geloescht.
+    when = parseGermanLocal(raw);
+    if (!when) {
+      flash(req, 'error', 'Ungültiges Lösch-Datum.');
+      return res.redirect('/admin/accounts');
+    }
+  } else {
+    // Feld frei gelassen -> sofort und unbegrenzt (bis zur manuellen Reaktivierung).
+    when = new Date();
   }
   const deleteAt = when.toISOString();
   const now = new Date();
@@ -1392,20 +1561,20 @@ app.post('/admin/accounts/:id/delete', requireRoot, (req, res) => {
       WHERE id = ?
     `).run(deleteAt, reason, target.id);
     logAccountAction(target.id, req.user.id, 'delete_scheduled',
-      `${reason} (geplante Löschung: ${new Date(deleteAt).toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short' })})`);
-    flash(req, 'success', `Löschung von ${target.username} für ${new Date(deleteAt).toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short' })} geplant.`);
+      `${reason} (geplante Löschung: ${new Date(deleteAt).toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Europe/Berlin' })})`);
+    flash(req, 'success', `Löschung von ${target.username} für ${new Date(deleteAt).toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Europe/Berlin' })} geplant.`);
   }
   res.redirect('/admin/accounts');
 });
 
 app.post('/admin/accounts/:id/enable', requireRoot, async (req, res) => {
   const target = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
-  if (!target || target.status !== 'disabled') return res.redirect('/admin/accounts');
+  if (!target || (target.status !== 'disabled' && target.status !== 'deleted')) return res.redirect('/admin/accounts');
 
   const reason = String(req.body.reason || '').trim();
   db.prepare(`
     UPDATE users SET status = 'active', disabled_reason = NULL, disabled_at = NULL, disabled_by = NULL,
-        updated_at = datetime('now')
+        delete_at = NULL, disable_until = NULL, updated_at = datetime('now')
     WHERE id = ?
   `).run(target.id);
 
@@ -1502,8 +1671,42 @@ app.post('/admin/accounts/:id/note', requireHR, (req, res) => {
 // ---------------------------------------------------------------------------
 // Geplante Reaktivierungen/Löschungen abarbeiten (alle 60 s)
 // ---------------------------------------------------------------------------
+// Einmalige Korrektur bestehender Planungen: Vor diesem Fix wurde ein
+// "datetime-local"-Wert direkt als Server-Zeit interpretiert. Auf Render
+// (Server = UTC) lagen damit alle geplanten Löschungen/Freigaben um die
+// deutsche Zeitverschiebung (+1/+2 h) daneben. Die Migration läuft nur auf
+// UTC-Servern und nur einmal (per Settings-Flag).
+function migrateScheduledTimes() {
+  if (new Date().getTimezoneOffset() !== 0) return;
+  if (getSetting('tz_migration_v1')) return;
+  const rows = db.prepare(`
+    SELECT id, delete_at, disable_until FROM users
+    WHERE delete_at IS NOT NULL OR disable_until IS NOT NULL
+  `).all();
+  let fixed = 0;
+  for (const r of rows) {
+    const fix = (iso) => {
+      if (!iso) return null;
+      const d = new Date(iso);
+      if (Number.isNaN(d.getTime())) return null;
+      return new Date(d.getTime() - berlinOffsetMs(d)).toISOString();
+    };
+    const deleteAt = fix(r.delete_at);
+    const disableUntil = fix(r.disable_until);
+    if (deleteAt || disableUntil) {
+      db.prepare('UPDATE users SET delete_at = ?, disable_until = ? WHERE id = ?')
+        .run(deleteAt, disableUntil, r.id);
+      fixed++;
+    }
+  }
+  setSetting('tz_migration_v1', new Date().toISOString());
+  if (fixed > 0) {
+    console.log(`Migration: ${fixed} geplante Löschung(en)/Freigabe(n) auf deutsche Zeit (Europe/Berlin) korrigiert.`);
+  }
+}
+
 function runAccountScheduler() {
-  const now = new Date().toISOString();
+  const now = nowUtcIso();
   const toEnable = db.prepare(`
     SELECT * FROM users WHERE status = 'disabled' AND disable_until IS NOT NULL AND disable_until <= ?
   `).all(now);
@@ -1566,14 +1769,20 @@ function markAllOverdue() {
 
 if (require.main === module) {
   markAllOverdue();
-  runBackup();
+  migrateScheduledTimes();
   // Account-Scheduler: automatische Freigaben/Löschungen alle 60 Sekunden
+  runAccountScheduler();
   setInterval(runAccountScheduler, 60 * 1000);
-  // Taegliches Backup + taegliche Überfaelligkeits-Markierung
+  // Backup-Scheduler: wöchentliches Auto-Backup + monatliches Aufräumen.
+  // Zeitstempel liegen in den Settings – überlebt damit Server-Neustarts.
+  backups.runWeeklyAutoBackupIfDue();
+  backups.runMonthlyCleanupIfDue();
   setInterval(() => {
-    markAllOverdue();
-    runBackup();
-  }, 24 * 60 * 60 * 1000);
+    backups.runWeeklyAutoBackupIfDue();
+    backups.runMonthlyCleanupIfDue();
+  }, 60 * 60 * 1000);
+  // Taegliche Überfaelligkeits-Markierung
+  setInterval(markAllOverdue, 24 * 60 * 60 * 1000);
 
   app.listen(PORT, () => {
     console.log(`TicketSystem MRB läuft auf ${BASE_URL}`);

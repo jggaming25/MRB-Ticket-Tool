@@ -463,6 +463,19 @@ function findMail(subjectPart) {
   const deletedUser = db.prepare('SELECT * FROM users WHERE id = ?').get(hrUser.id);
   ok('Loeschung: Status = deleted', deletedUser.status === 'deleted');
 
+  // Gelöschtes Konto kann reaktiviert werden
+  r = await post(`/admin/accounts/${hrUser.id}/enable`, { reason: 'Fehler, Konto wiederhergestellt' }, hrhrCookie);
+  ok('HR-HR: geloeschtes Konto kann reaktiviert werden', r.status === 302 && r.location === '/admin/accounts');
+  const revivedUser = db.prepare('SELECT * FROM users WHERE id = ?').get(hrUser.id);
+  ok('Reaktivierung nach Loeschung: Status = active', revivedUser.status === 'active');
+
+  // Löschen ohne Datumsangabe = sofort (unbegrenzt)
+  r = await post(`/admin/accounts/${hrUser.id}/delete`, { reason: 'Sofortloeschung ohne Datum' }, hrhrCookie);
+  ok('HR-HR: Loeschung ohne Datum sofort ausgefuehrt', r.status === 302 && r.location === '/admin/accounts');
+  const deletedNow = db.prepare('SELECT * FROM users WHERE id = ?').get(hrUser.id);
+  ok('Sofortloeschung: Status = deleted', deletedNow.status === 'deleted' && deletedNow.delete_at === null);
+
+
   // Löschen eines HR-HR nicht moeglich
   r = await post(`/admin/accounts/${hrhrUser.id}/delete`, { reason: 'x' }, hrhrCookie);
   ok('HR-HR: HR-HR kann nicht geloescht werden', r.status === 400);
@@ -527,6 +540,54 @@ function findMail(subjectPart) {
   ok('Startseite oeffentlich erreichbar', r.status === 200 && r.body.includes('Mitteldeutsche Regionalbahn'));
   r = await get('/dashboard');
   ok('Ohne Login: Dashboard leitet zu /login', r.status === 302 && r.location === '/login');
+
+  // ==================================================================
+  // 10) Admin-Optionen (IT-Alarm, Lockdown) + Backups
+  // ==================================================================
+  const lockUser = await discordLogin('lockuser', 'LockUser', 'lock@example.com');
+
+  // IT-Alarm setzen -> Banner fuer eingeloggte Nutzer
+  r = await post('/account/settings/admin/alarm', { action: 'set', text: 'Wartung am Freitag' }, hrhrCookie);
+  ok('IT-Alarm: aktiviert', r.status === 302);
+  r = await get('/', lockUser);
+  ok('IT-Alarm: Banner fuer eingeloggte Nutzer sichtbar', r.body.includes('IT-Alarm') && r.body.includes('Wartung am Freitag'));
+  r = await post('/account/settings/admin/alarm', { action: 'clear' }, hrhrCookie);
+  ok('IT-Alarm: deaktiviert', r.status === 302);
+  r = await get('/', lockUser);
+  ok('IT-Alarm: Banner nach Deaktivierung weg', !r.body.includes('Wartung am Freitag'));
+
+  // Zugriff sperren: nur der Inhaber kommt weiter, alle anderen werden rausgeworfen
+  r = await post('/account/settings/admin/lockdown', { action: 'enable', message: '' }, hrhrCookie);
+  ok('Lockdown: durch Inhaber aktiviert', r.status === 302);
+  r = await get('/dashboard', lockUser);
+  ok('Lockdown: anderer Nutzer wird sofort ausgeloggt', r.status === 302 && r.location === '/login?locked=1');
+  r = await get('/login?locked=1');
+  ok('Lockdown: Login-Seite zeigt Sperrmeldung', r.body.includes('Der Zugriff auf das System wurde gerade für alle Bearbeiter gesperrt.'));
+  r = await get('/dashboard', hrhrCookie);
+  ok('Lockdown: Inhaber hat weiterhin Zugriff', r.status === 200 && r.body.includes('Meine Tickets'));
+  r = await post('/account/settings/admin/lockdown', { action: 'disable' }, hrhrCookie);
+  ok('Lockdown: durch Inhaber wieder freigegeben', r.status === 302);
+
+  // Nicht-Inhaber darf Admin-Optionen nicht nutzen
+  r = await post('/account/settings/admin/restart', {}, userCookie);
+  ok('Admin-Optionen: normaler Nutzer verweigert (403)', r.status === 403);
+
+  // Backups: manuell erstellen, Slots, Download, loeschen, alles loeschen
+  const backupsBefore = db.prepare('SELECT COUNT(*) AS c FROM backups').get().c;
+  r = await post('/account/settings/admin/backups/create', {}, hrhrCookie);
+  ok('Backup: manuell erstellt', r.status === 302);
+  ok('Backup: ein Eintrag hinzugefuegt', db.prepare('SELECT COUNT(*) AS c FROM backups').get().c === backupsBefore + 1);
+  r = await get('/account/settings', hrhrCookie);
+  ok('Backup: Slots-Hinweis + Liste sichtbar', r.body.includes('Slots frei') && r.body.includes('Download'));
+  const backupRow = db.prepare('SELECT * FROM backups ORDER BY id DESC LIMIT 1').get();
+  r = await get(`/account/settings/admin/backups/${backupRow.id}/download`, hrhrCookie);
+  ok('Backup: Download liefert JSON mit Nutzer-/Ticketdaten', r.status === 200 && r.body.includes('users') && r.body.includes('tickets'));
+  r = await post(`/account/settings/admin/backups/${backupRow.id}/delete`, {}, hrhrCookie);
+  ok('Backup: einzelnes Backup loeschbar', r.status === 302);
+  ok('Backup: Eintrag wieder entfernt', db.prepare('SELECT COUNT(*) AS c FROM backups').get().c === backupsBefore);
+  r = await post('/account/settings/admin/backups/clear', {}, hrhrCookie);
+  ok('Backup: alle Backups loeschen (jlg09)', r.status === 302);
+  ok('Backup: nach clear alle weg', db.prepare('SELECT COUNT(*) AS c FROM backups').get().c === 0);
 
   // Session-Lebensdauer: Discord-Login-Cookie laeuft in 14 Tagen ab
   const freshAuth = await get('/auth/discord');

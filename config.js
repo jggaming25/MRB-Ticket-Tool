@@ -121,12 +121,22 @@ module.exports = {
   },
 
   // ---------------------------------------------------------------------------
-  // Backups (taeglich, automatisch beim Start + alle 24 h)
+  // Backups (alle Daten; werden in der DB gespeichert und gelten damit auch
+  // bei Turso/Render). Wöchentlich automatisch, maximal `max` Stück.
+  // Monatlich wird automatisch aufgeräumt, sodass die neuesten `monthlyKeep`
+  // Backups übrig bleiben. Manuell kann der Inhaber jederzeit aufräumen.
   // ---------------------------------------------------------------------------
   backup: {
     dir: path.join(__dirname, 'backups'),
-    keepDays: 30,
+    max: 20,
+    monthlyKeep: 16,
+    autoIntervalDays: 7,
+    monthlyCleanupDays: 30,
   },
+
+  // Meldung, die bei gesperrtem Zugriff (Lockdown) auf der Login-Seite
+  // und im Einstellungs-Bereich angezeigt wird.
+  lockdownMessage: 'Der Zugriff auf das System wurde gerade für alle Bearbeiter gesperrt.',
 
   // Alle Anhaenge-Typen, die im Ticketverlauf direkt als Bildvorschau angezeigt
   // werden (sonst nur Download-Link).

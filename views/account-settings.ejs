@@ -66,4 +66,101 @@
     </table>
   </div>
 
+  <% if (adminData) { %>
+    <div class="card admin-options">
+      <h2>Admin-Optionen</h2>
+      <p class="muted">Nur für festgelegte Inhaber sichtbar.</p>
+
+      <h3>Zugriff für alle sperren</h3>
+      <% if (adminData.lockdown) { %>
+        <p class="hint">
+          Der Zugriff ist derzeit <strong>gesperrt</strong>: Nur dein Account kann sich einloggen.
+          Meldung: „<%= adminData.lockdown.message || adminData.lockdownDefaultMsg %>"
+        </p>
+        <form method="post" action="/account/settings/admin/lockdown" class="inline-form">
+          <input type="hidden" name="action" value="disable">
+          <button type="submit" class="btn btn-ghost" data-confirm="Zugriff für alle Bearbeiter wieder freigeben?">Zugriff wieder freigeben</button>
+        </form>
+      <% } else { %>
+        <p class="hint">Sperrt den Zugriff für alle Bearbeiter (ausgenommen dein Account). Alle anderen werden sofort ausgeloggt und können sich nicht mehr anmelden.</p>
+        <form method="post" action="/account/settings/admin/lockdown" class="admin-form">
+          <input type="hidden" name="action" value="enable">
+          <label class="small">Meldung (optional)</label>
+          <input type="text" name="message" class="input" value="<%= adminData.lockdownDefaultMsg %>" placeholder="Der Zugriff auf das System wurde gerade für alle Bearbeiter gesperrt.">
+          <button type="submit" class="btn btn-danger" data-confirm="Wirklich den Zugriff für ALLE Bearbeiter sperren?">Zugriff für alle sperren</button>
+        </form>
+      <% } %>
+
+      <hr class="admin-sep">
+
+      <h3>IT-Alarm</h3>
+      <% if (adminData.alarm && adminData.alarm.active) { %>
+        <p class="hint">Alarm ist <strong>aktiv</strong>: „<%= adminData.alarm.text %>"</p>
+        <form method="post" action="/account/settings/admin/alarm" class="inline-form">
+          <input type="hidden" name="action" value="clear">
+          <button type="submit" class="btn btn-ghost">Alarm deaktivieren</button>
+        </form>
+      <% } else { %>
+        <p class="hint">Setzt einen globalen Hinweis-Banner, der oben auf allen Seiten für alle eingeloggten Nutzer erscheint.</p>
+        <form method="post" action="/account/settings/admin/alarm" class="admin-form">
+          <input type="hidden" name="action" value="set">
+          <label class="small">Alarm-Text *</label>
+          <input type="text" name="text" class="input" required placeholder="z. B. Achtung: Wartungsarbeiten am Freitag 18–20 Uhr">
+          <button type="submit" class="btn btn-primary">Alarm aktivieren</button>
+        </form>
+      <% } %>
+
+      <hr class="admin-sep">
+
+      <h3>System-Neustart</h3>
+      <p class="hint">Startet den Server komplett neu (ca. 1–2 Minuten Ausfallzeit). Tickets und Daten bleiben erhalten.</p>
+      <form method="post" action="/account/settings/admin/restart" class="inline-form">
+        <button type="submit" class="btn btn-ghost" data-confirm="System wirklich neu starten?">System neu starten</button>
+      </form>
+
+      <hr class="admin-sep">
+
+      <h3>Backups</h3>
+      <p class="hint">
+        <strong><%= adminData.backupSlotsFree %> / <%= adminData.backupMax %> Slots frei.</strong>
+        Automatisch wöchentlich; bei 20/20 wird kein Backup mehr erstellt, bis aufgeräumt wird (monatlich automatisch bzw. jederzeit manuell durch jlg09).
+      </p>
+      <form method="post" action="/account/settings/admin/backups/create" class="inline-form">
+        <button type="submit" class="btn btn-primary" <%= adminData.backupSlotsFree === 0 ? 'disabled' : '' %>>
+          <%= adminData.backupSlotsFree === 0 ? 'Kein Platz (0/20) – erst aufräumen' : 'Manuelles Backup erstellen' %>
+        </button>
+      </form>
+
+      <% if (adminData.backups.length) { %>
+        <table class="table table-compact" style="margin-top:14px;">
+          <thead>
+            <tr><th>Zeit</th><th>Art</th><th>Größe</th><th></th></tr>
+          </thead>
+          <tbody>
+            <% adminData.backups.forEach((b) => { %>
+              <tr>
+                <td class="muted small"><%= fmtDate(b.created_at) %></td>
+                <td><span class="tag <%= b.kind === 'manual' ? 'log-invited' : 'log-enabled' %>"><%= b.kind === 'manual' ? 'Manuell' : 'Auto' %></span></td>
+                <td class="small"><%= b.size > 1048576 ? (b.size / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(b.size / 1024)) + ' KB' %></td>
+                <td class="small" style="white-space:nowrap;">
+                  <a class="btn btn-sm btn-ghost" href="/account/settings/admin/backups/<%= b.id %>/download">Download</a>
+                  <form method="post" action="/account/settings/admin/backups/<%= b.id %>/delete" class="inline-form"
+                        data-confirm="Dieses Backup wirklich löschen?">
+                    <button type="submit" class="btn btn-sm btn-danger">Löschen</button>
+                  </form>
+                </td>
+              </tr>
+            <% }) %>
+          </tbody>
+        </table>
+        <form method="post" action="/account/settings/admin/backups/clear" class="inline-form" style="margin-top:10px;"
+              data-confirm="Wirklich ALLE Backups löschen? Das gibt alle 20 Slots frei und kann nicht rückgängig gemacht werden.">
+          <button type="submit" class="btn btn-sm btn-danger">Alle Backups löschen (jlg09)</button>
+        </form>
+      <% } else { %>
+        <p class="muted" style="margin-top:12px;">Noch keine Backups vorhanden. Das erste automatische Backup wird in der ersten Woche erstellt – oder du erstellst jetzt eins.</p>
+      <% } %>
+    </div>
+  <% } %>
+
 <%- include('partials/footer') %>

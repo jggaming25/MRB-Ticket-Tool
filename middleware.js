@@ -1,6 +1,6 @@
 'use strict';
 
-const { db } = require('./db');
+const { db, getSetting } = require('./db');
 const config = require('./config');
 
 const ROLE_LABELS = { user: 'Nutzer', hr: 'Team', hrhr: 'Inhaber' };
@@ -145,6 +145,38 @@ function onboardingGuard(req, res, next) {
   return next();
 }
 
+// Liest die Lockdown-Einstellung (JSON) aus den Settings.
+function getLockdown() {
+  const raw = getSetting('system_lockdown');
+  if (!raw) return null;
+  try {
+    const lock = JSON.parse(raw);
+    return lock && lock.enabled ? lock : null;
+  } catch {
+    return null;
+  }
+}
+
+// Zugriff für alle sperren (außer dem Inhaber): Sobald der Lockdown aktiv
+// ist, werden alle anderen Nutzer sofort ausgeloggt (Session zerstört) und
+// auf die Login-Seite mit Meldung geleitet. Öffentliche Seiten (Startseite,
+// Login, statische Dateien) bleiben erreichbar, damit die Meldung sichtbar ist.
+function lockdownGuard(req, res, next) {
+  if (req.path === '/healthz') return next();
+  const lock = getLockdown();
+  if (!lock) return next();
+  // Der festgelegte Inhaber (is_root) hat immer Zugriff.
+  if (isRoot(req.user)) return next();
+  // Öffentliche Seiten (Startseite, Login, statische Dateien) bleiben
+  // erreichbar, damit die Sperrmeldung sichtbar ist.
+  if (req.path === '/' || req.path === '/login' || req.path === '/sw.js' ||
+      req.path === '/impressum' || req.path === '/datenschutz' ||
+      req.path.startsWith('/auth/') || req.path.startsWith('/static/')) return next();
+  req.session.destroy(() => {});
+  res.locals.user = null;
+  return res.redirect('/login?locked=1');
+}
+
 function categories() {
   return config.categories;
 }
@@ -172,6 +204,8 @@ module.exports = {
   requireHRHR,
   requireRoot,
   onboardingGuard,
+  lockdownGuard,
+  getLockdown,
   isHR,
   isHRHR,
   isRoot,
