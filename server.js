@@ -11,7 +11,7 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const multer = require('multer');
 
-const { db, isRemote, DB_PATH: dbPaths, nextTicketNumber, insertSystemMessage, logAccountAction, logTicketAction, addAccountNote, getSetting, setSetting } = require('./db');
+const { db, isRemote, DB_PATH: dbPaths, nextTicketNumber, insertSystemMessage, logAccountAction, logTicketAction, logActionLabel, addAccountNote, getSetting, setSetting } = require('./db');
 const discord = require('./discord');
 const mailer = require('./mailer');
 const config = require('./config');
@@ -179,6 +179,7 @@ app.use((req, res, next) => {
   res.locals.isRoot = (u) => isRoot(u);
   res.locals.isOverdue = isOverdue;
   res.locals.accountStatusLabel = (s) => STATUS_LABELS[s] || s;
+  res.locals.logActionLabel = logActionLabel;
   res.locals.lockdown = getLockdown();
   let itAlarm = null;
   try { itAlarm = JSON.parse(getSetting('it_alarm') || 'null'); } catch { itAlarm = null; }
@@ -1497,9 +1498,11 @@ app.get('/admin/logs', requireRoot, (req, res) => {
     `).all(...p);
   }
 
-  // Alle bisher bekannten Aktionen für das Dropdown
+  // Alle bisher bekannten Aktionen für das Dropdown (ohne Platzhalter,
+  // mit deutscher Beschriftung)
   const actions = db.prepare('SELECT DISTINCT action FROM account_logs UNION SELECT DISTINCT action FROM ticket_logs ORDER BY action')
-    .all().map((r) => r.action).filter((a) => a && a.trim());
+    .all().map((r) => r.action).filter((a) => a && a.trim() && a !== 'unbekannt')
+    .map((a) => ({ value: a, label: logActionLabel(a) }));
 
   res.render('admin-logs', {
     title: 'Audit-Log',

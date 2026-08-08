@@ -229,7 +229,7 @@
             <tr>
               <td class="muted small"><%= fmtDate(l.created_at) %></td>
               <td><%= l.actor_global || l.actor_name || 'System' %></td>
-              <td><span class="tag log-<%= l.action || 'unbekannt' %>"><%= l.action || 'unbekannt' %></span></td>
+              <td><span class="tag log-<%= l.action || 'unbekannt' %>"><%= logActionLabel(l.action, l.details) %></span></td>
               <td class="muted small"><%= l.details || '' %></td>
             </tr>
           <% }) %>

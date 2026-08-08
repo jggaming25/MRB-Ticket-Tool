@@ -264,14 +264,117 @@ migrateUsers();
 migrateTickets();
 migrateMessages();
 
-// Bereinigt alte/leere Audit-Log-Eintraege: Wenn die Aktion fehlt, wird ein
-// Platzhalter gesetzt, damit in der UI keine leere "Aktion"-Spalte erscheint.
+// Anzeigenamen fuer Audit-Log-Aktionen (Roh-Keys -> deutsche Beschriftung).
+const LOG_ACTION_LABELS = {
+  // Ticket-Aktionen
+  created: 'Erstellt',
+  reply: 'Antwort',
+  closed: 'Geschlossen',
+  reopened: 'Wieder geöffnet',
+  status: 'Status geändert',
+  claimed: 'Übernommen',
+  unclaimed: 'Übernahme aufgehoben',
+  transferred: 'Übertragen',
+  release_requested: 'Freigabe beantragt',
+  due_set: 'Fälligkeit gesetzt',
+  // Konto-Aktionen
+  hrhr_created: 'Inhaber angelegt',
+  lockdown_enabled: 'Zugriff gesperrt',
+  lockdown_disabled: 'Zugriff freigegeben',
+  alarm_set: 'IT-Alarm gesetzt',
+  alarm_cleared: 'IT-Alarm deaktiviert',
+  system_restart: 'Neustart',
+  backups_cleared: 'Backups gelöscht',
+  disabled: 'Deaktiviert',
+  delete_scheduled: 'Löschung geplant',
+  deleted: 'Gelöscht',
+  enabled: 'Aktiviert',
+  enabled_auto: 'Auto-Reaktivierung',
+  deleted_auto: 'Auto-Löschung',
+  role_changed: 'Rolle geändert',
+  note_added: 'Notiz hinzugefügt',
+};
+
+// Beschriftung fuer die UI: bekannte Aktionen -> deutsches Label,
+// sonst lesbarer Ersatz statt eines rohen Keys bzw. "unbekannt".
+function logActionLabel(action, detail) {
+  if (action && LOG_ACTION_LABELS[action]) return LOG_ACTION_LABELS[action];
+  if (action && action !== 'unbekannt') return action;
+  return 'Unbekannt';
+}
+
+// Best-Effort-Rekonstruktion fehlender Aktionen aus den Detail-/Begruendungs-
+// Texten (aeltere Eintraege besassen keine Aktion). Reihenfolge wichtig:
+// speziellere Muster vor allgemeinen.
+const TICKET_ACTION_BY_TEXT = [
+  [/wieder geöffnet|wieder geoeffnet/i, 'reopened'],
+  [/Freigabe beantragt/i, 'release_requested'],
+  [/Übernahme von .* aufgehoben|aufgehoben/i, 'unclaimed'],
+  [/Übernommen von/i, 'claimed'],
+  [/Übergeben an|übergeben/i, 'transferred'],
+  [/Fälligkeit/i, 'due_set'],
+  [/geschlossen/i, 'closed'],
+  [/Status →|Status zu/i, 'status'],
+  [/Nachricht von/i, 'reply'],
+  [/erstellt/i, 'created'],
+];
+const ACCOUNT_ACTION_BY_TEXT = [
+  [/Inhaber-Account/i, 'hrhr_created'],
+  [/IT-Alarm deaktiviert/i, 'alarm_cleared'],
+  [/IT-Alarm gesetzt/i, 'alarm_set'],
+  [/Backups manuell gelöscht/i, 'backups_cleared'],
+  [/Neustart/i, 'system_restart'],
+  [/Automatische Reaktivierung/i, 'enabled_auto'],
+  [/Automatische Löschung/i, 'deleted_auto'],
+  [/Löschung geplant/i, 'delete_scheduled'],
+  [/Rolle/i, 'role_changed'],
+  [/Notiz/i, 'note_added'],
+  [/gesperrt/i, 'lockdown_enabled'],
+  [/freigegeben/i, 'lockdown_disabled'],
+  [/Löschung|gelöscht/i, 'deleted'],
+  [/deaktiviert/i, 'disabled'],
+  [/reaktiviert|aktiviert/i, 'enabled'],
+];
+
+function guessTicketAction(details) {
+  const d = details || '';
+  for (const [re, key] of TICKET_ACTION_BY_TEXT) {
+    if (re.test(d)) return key;
+  }
+  return null;
+}
+
+function guessAccountAction(reason) {
+  const r = reason || '';
+  for (const [re, key] of ACCOUNT_ACTION_BY_TEXT) {
+    if (re.test(r)) return key;
+  }
+  return null;
+}
+
+// Bereinigt alte/leere Audit-Log-Eintraege: Fehlende Aktionen werden so gut
+// wie moeglich aus Details/Begruendung rekonstruiert, statt dauerhaft
+// "unbekannt" anzuzeigen. Laueft bei jedem Start und repariert auch bereits
+// auf "unbekannt" gesetzte Alteintraege.
 function migrateLogActions() {
-  const fix = (table) => db.prepare(
-    `UPDATE ${table} SET action = 'unbekannt' WHERE action IS NULL OR trim(action) = ''`
-  ).run();
-  try { fix('account_logs'); } catch {}
-  try { fix('ticket_logs'); } catch {}
+  try {
+    const rows = db.prepare(
+      "SELECT id, details FROM ticket_logs WHERE action IS NULL OR trim(action) = '' OR action = 'unbekannt'"
+    ).all();
+    const upd = db.prepare('UPDATE ticket_logs SET action = ? WHERE id = ?');
+    for (const r of rows) {
+      upd.run(guessTicketAction(r.details) || 'unbekannt', r.id);
+    }
+  } catch {}
+  try {
+    const rows = db.prepare(
+      "SELECT id, reason FROM account_logs WHERE action IS NULL OR trim(action) = '' OR action = 'unbekannt'"
+    ).all();
+    const upd = db.prepare('UPDATE account_logs SET action = ? WHERE id = ?');
+    for (const r of rows) {
+      upd.run(guessAccountAction(r.reason) || 'unbekannt', r.id);
+    }
+  } catch {}
 }
 migrateLogActions();
 
@@ -334,5 +437,7 @@ module.exports = {
   insertSystemMessage,
   logAccountAction,
   logTicketAction,
+  logActionLabel,
+  migrateLogActions,
   addAccountNote,
 };

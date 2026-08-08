@@ -71,7 +71,7 @@ global.fetch = async (url, opts = {}) => {
 
 // /auth/discord erzeugt zufaelligen State
 const { app, sessionStore } = require('./server');
-const { db } = require('./db');
+const { db, migrateLogActions, logActionLabel } = require('./db');
 const config = require('./config');
 const pushModule = require('./push');
 
@@ -508,9 +508,20 @@ function findMail(subjectPart) {
   // Leere Aktion in der Vergangenheit: Die UI zeigt einen Fallback statt einer leeren Spalte
   db.prepare("INSERT INTO account_logs (account_id, actor_id, action, reason) VALUES (?, ?, '', 'Test leerer Action')").run(normalUser.id, hrhrUser.id);
   r = await get('/admin/accounts', hrhrCookie);
-  ok('Audit-Log: leere Aktion zeigt Fallback statt nichts', r.body.includes('unbekannt'), 'unbekannt fehlt');
+  ok('Audit-Log: leere Aktion zeigt Fallback statt nichts', r.body.includes('Unbekannt'), 'Unbekannt fehlt');
   r = await get('/admin/logs', hrhrCookie);
-  ok('Audit-Log-Seite: leere Aktion zeigt Fallback', r.body.includes('unbekannt'));
+  ok('Audit-Log-Seite: leere Aktion zeigt Fallback', r.body.includes('Unbekannt'));
+
+  // Aktionen-Backfill: Leere Aktionen werden beim Start aus Details/Begruendung rekonstruiert
+  db.prepare("INSERT INTO account_logs (account_id, actor_id, action, reason) VALUES (?, ?, '', 'IT-Alarm gesetzt.')").run(normalUser.id, hrhrUser.id);
+  db.prepare("INSERT INTO ticket_logs (ticket_id, actor_id, action, details) VALUES (?, ?, '', 'Ticket geschlossen')").run(ticketId, hrhrUser.id);
+  migrateLogActions();
+  const backfilledAccount = db.prepare("SELECT action FROM account_logs WHERE reason = 'IT-Alarm gesetzt.'").get();
+  const backfilledTicket = db.prepare("SELECT action FROM ticket_logs WHERE details = 'Ticket geschlossen'").get();
+  ok('Backfill: Konto-Aktion aus Begruendung rekonstruiert', backfilledAccount && backfilledAccount.action === 'alarm_set', `action=${backfilledAccount && backfilledAccount.action}`);
+  ok('Backfill: Ticket-Aktion aus Details rekonstruiert', backfilledTicket && backfilledTicket.action === 'closed', `action=${backfilledTicket && backfilledTicket.action}`);
+  ok('LogLabel: bekannte Aktion -> deutsches Label', logActionLabel('created') === 'Erstellt', logActionLabel('created'));
+  ok('LogLabel: unbekannte Aktion -> Unbekannt', logActionLabel('') === 'Unbekannt');
 
   // ==================================================================
   // 8) Kontoeinstellungen + Benachrichtigungen
