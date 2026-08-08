@@ -24,8 +24,12 @@ const {
   requireHRHR,
   requireRoot,
   onboardingGuard,
+  alarmGuard,
   lockdownGuard,
   getLockdown,
+  getAlarm,
+  alarmFired,
+  ALARM_GRACE_MS,
   isHR,
   isHRHR,
   isRoot,
@@ -151,6 +155,7 @@ app.use(session({
 
 app.use(loadUser);
 app.use(onboardingGuard);
+app.use(alarmGuard);
 app.use(lockdownGuard);
 
 // Flash-Nachrichten
@@ -181,9 +186,10 @@ app.use((req, res, next) => {
   res.locals.accountStatusLabel = (s) => STATUS_LABELS[s] || s;
   res.locals.logActionLabel = logActionLabel;
   res.locals.lockdown = getLockdown();
-  let itAlarm = null;
-  try { itAlarm = JSON.parse(getSetting('it_alarm') || 'null'); } catch { itAlarm = null; }
-  res.locals.itAlarm = itAlarm && itAlarm.active ? itAlarm : null;
+  const alarm = getAlarm();
+  res.locals.itAlarm = alarm;
+  res.locals.alarmFired = alarm ? alarmFired(alarm) : false;
+  res.locals.alarmDeadline = alarm ? (new Date(alarm.set_at).getTime() + ALARM_GRACE_MS) : 0;
   res.locals.fmtDate = (iso) => {
     if (!iso) return '–';
     const d = new Date(iso.endsWith('Z') ? iso : iso.replace(' ', 'T') + 'Z');
@@ -412,7 +418,11 @@ const fileDownloadLimiter = rateLimit({
 app.get('/login', (req, res) => {
   if (req.user) return res.redirect('/dashboard');
   const lock = getLockdown();
-  const lockedMsg = req.query.locked ? (lock ? lock.message : null) : null;
+  const alarm = getAlarm();
+  const fired = alarm ? alarmFired(alarm) : false;
+  const lockedMsg = req.query.locked
+    ? (lock ? lock.message : null) || (fired && alarm ? alarm.text : null) || config.lockdownMessage
+    : null;
   res.render('login', { title: 'Login', lockedMsg });
 });
 
@@ -438,15 +448,24 @@ app.get('/auth/callback', authLimiter, async (req, res) => {
     // Zugriff gesperrt (Lockdown): Nur der festgelegte Inhaber kann sich
     // einloggen, alle anderen werden mit der Meldung abgewiesen.
     const lock = getLockdown();
-    if (lock) {
-      const isOwner = discord.isAuthorizedDiscord(dUser);
-      if (!isOwner) {
-        return res.status(403).render('error', {
-          title: 'Zugriff gesperrt',
-          message: lock.message || config.lockdownMessage,
-          code: 403,
-        });
-      }
+    const isOwner = discord.isAuthorizedDiscord(dUser);
+    if (lock && !isOwner) {
+      return res.status(403).render('error', {
+        title: 'Zugriff gesperrt',
+        message: lock.message || config.lockdownMessage,
+        code: 403,
+      });
+    }
+
+    // Aktive Meldung (ehemals IT-Alarm): Nach Ablauf der Frist ist der Zugriff
+    // gesperrt – nur der Inhaber kann sich wieder anmelden.
+    const alarm = getAlarm();
+    if (alarm && alarmFired(alarm) && !isOwner) {
+      return res.status(403).render('error', {
+        title: 'Meldung aktiv',
+        message: alarm.text || config.lockdownMessage,
+        code: 403,
+      });
     }
 
     // Server-Prüfung: Der Nutzer muss Mitglied des Discord-Servers sein.
@@ -561,14 +580,18 @@ app.get('/account/settings', requireLogin, (req, res) => {
   res.render('account-settings', {
     title: 'Kontoeinstellungen',
     user: req.user,
-    adminData: isRoot(req.user) ? {
-      lockdown: getLockdown(),
-      lockdownDefaultMsg: config.lockdownMessage,
-      alarm: (() => { try { return JSON.parse(getSetting('it_alarm') || 'null'); } catch { return null; } })(),
-      backups: backups.listBackups(),
-      backupSlotsFree: backups.slotsFree(),
-      backupMax: backups.maxSlots(),
-    } : null,
+    adminData: isRoot(req.user) ? (() => {
+      const alarm = getAlarm();
+      return {
+        lockdown: getLockdown(),
+        lockdownDefaultMsg: config.lockdownMessage,
+        alarm,
+        alarmFired: alarm ? alarmFired(alarm) : false,
+        backups: backups.listBackups(),
+        backupSlotsFree: backups.slotsFree(),
+        backupMax: backups.maxSlots(),
+      };
+    })() : null,
   });
 });
 
@@ -606,12 +629,14 @@ app.post('/account/settings/admin/lockdown', requireRoot, (req, res) => {
   res.redirect('/account/settings');
 });
 
-// IT-Alarm: globaler Hinweis-Banner für alle eingeloggten Nutzer
+// Meldungen (ehemals IT-Alarm): Alarm-Banner mit Ton für alle eingeloggten
+// Nutzer; nach 7,5 s werden alle außer dem Inhaber automatisch ausgeloggt
+// und können sich erst wieder anmelden, wenn die Meldung aufgehoben ist.
 app.post('/account/settings/admin/alarm', requireRoot, (req, res) => {
   if (req.body.action === 'set') {
     const text = String(req.body.text || '').trim();
     if (!text) {
-      flash(req, 'error', 'Bitte gib einen Alarm-Text ein.');
+      flash(req, 'error', 'Bitte gib einen Meldungstext ein.');
       return res.redirect('/account/settings');
     }
     setSetting('it_alarm', JSON.stringify({
@@ -620,12 +645,12 @@ app.post('/account/settings/admin/alarm', requireRoot, (req, res) => {
       set_by: req.user.id,
       set_at: new Date().toISOString(),
     }));
-    logAccountAction(req.user.id, req.user.id, 'alarm_set', 'IT-Alarm gesetzt.');
-    flash(req, 'success', 'IT-Alarm aktiviert. Der Hinweis erscheint oben auf allen Seiten.');
+    logAccountAction(req.user.id, req.user.id, 'alarm_set', 'Meldung gesetzt.');
+    flash(req, 'success', 'Meldung gesetzt. Alle Bearbeiter werden gleich automatisch abgemeldet (nur du hast weiterhin Zugriff).');
   } else {
     setSetting('it_alarm', '');
-    logAccountAction(req.user.id, req.user.id, 'alarm_cleared', 'IT-Alarm deaktiviert.');
-    flash(req, 'success', 'IT-Alarm deaktiviert.');
+    logAccountAction(req.user.id, req.user.id, 'alarm_cleared', 'Meldung aufgehoben.');
+    flash(req, 'success', 'Meldung aufgehoben. Der Zugriff ist wieder für alle möglich.');
   }
   res.redirect('/account/settings');
 });
@@ -759,9 +784,9 @@ app.get('/', (req, res) => {
 // (Lockdown / IT-Alarm) ausgelöst hat und sperren sich dann selbst.
 app.get('/api/status', (req, res) => {
   const lock = getLockdown();
-  let alarm = null;
-  try { alarm = JSON.parse(getSetting('it_alarm') || 'null'); } catch { alarm = null; }
+  const alarm = getAlarm();
   const alarmActive = alarm && alarm.active ? alarm : null;
+  const alarmLocked = alarmActive ? alarmFired(alarm) : false;
   res.set('Access-Control-Allow-Origin', '*');
   res.set('Cache-Control', 'no-store');
   res.json({
@@ -772,9 +797,18 @@ app.get('/api/status', (req, res) => {
       set_by: (lock && lock.set_by) || null,
       set_at: (lock && lock.set_at) || null,
     },
+    // Meldung (ehemals IT-Alarm): "locked" ist true, sobald die Frist abgelaufen
+    // ist und der Zugriff gesperrt wurde. "itAlarm" bleibt aus Kompatibilität.
+    meldung: {
+      active: !!alarmActive,
+      text: (alarmActive && alarmActive.text) || '',
+      locked: alarmLocked,
+      set_at: (alarmActive && alarmActive.set_at) || null,
+    },
     itAlarm: {
       active: !!alarmActive,
       text: (alarmActive && alarmActive.text) || '',
+      locked: alarmLocked,
     },
     ts: new Date().toISOString(),
   });

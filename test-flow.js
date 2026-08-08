@@ -71,7 +71,7 @@ global.fetch = async (url, opts = {}) => {
 
 // /auth/discord erzeugt zufaelligen State
 const { app, sessionStore } = require('./server');
-const { db, migrateLogActions, logActionLabel } = require('./db');
+const { db, migrateLogActions, logActionLabel, setSetting } = require('./db');
 const config = require('./config');
 const pushModule = require('./push');
 
@@ -577,7 +577,7 @@ function findMail(subjectPart) {
   ok('Turso-Szenario: SELECT * liefert Key ACTION (gross)', rawRow && rawRow.ACTION === 'alarm_set' && rawRow.action === undefined, JSON.stringify(rawRow));
   const normRow = { ...rawRow, action: rawRow.ACTION };
   ok('Turso-Szenario: Normalisierung stellt action bereit', normRow.action === 'alarm_set');
-  ok('Turso-Szenario: Label korrekt nach Normalisierung', logActionLabel(normRow.action) === 'IT-Alarm gesetzt', logActionLabel(normRow.action));
+  ok('Turso-Szenario: Label korrekt nach Normalisierung', logActionLabel(normRow.action) === 'Meldung gesetzt', logActionLabel(normRow.action));
   db.prepare('DROP TABLE upper_log').run();
 
   // Legacy-Backfill: alte Detail-/Begruendungstexte werden korrekt rekonstruiert
@@ -660,26 +660,54 @@ function findMail(subjectPart) {
   ok('Ohne Login: Dashboard leitet zu /login', r.status === 302 && r.location === '/login');
 
   // ==================================================================
-  // 10) Admin-Optionen (IT-Alarm, Lockdown) + Backups
+  // 10) Admin-Optionen (Meldungen, Lockdown) + Backups
   // ==================================================================
-  const lockUser = await discordLogin('lockuser', 'LockUser', 'lock@example.com');
+  let lockUser = await discordLogin('lockuser', 'LockUser', 'lock@example.com');
 
-  // IT-Alarm setzen -> Banner fuer eingeloggte Nutzer
+  // Meldung (ehemals IT-Alarm) senden -> Banner mit Ton + Countdown,
+  // nach 7,5 s werden alle außer dem Inhaber automatisch ausgeloggt.
   r = await post('/account/settings/admin/alarm', { action: 'set', text: 'Wartung am Freitag' }, hrhrCookie);
-  ok('IT-Alarm: aktiviert', r.status === 302);
+  ok('Meldung: durch Inhaber gesetzt', r.status === 302);
+  // Während der Frist (7,5 s): Banner + Alarmton + Countdown sichtbar, Zugriff bleibt
   r = await get('/', lockUser);
-  ok('IT-Alarm: Banner fuer eingeloggte Nutzer sichtbar', r.body.includes('IT-Alarm') && r.body.includes('Wartung am Freitag'));
+  ok('Meldung: Banner mit Ton + Countdown fuer eingeloggte Nutzer', r.body.includes('Wartung am Freitag') && r.body.includes('data-alarm="1"') && r.body.includes('data-countdown') && r.body.includes('/auth/logout'));
+  r = await get('/api/status');
+  let statusJson = JSON.parse(r.body);
+  ok('API-Status: Meldung aktiv (Frist laeuft)', statusJson.meldung && statusJson.meldung.active === true && statusJson.meldung.locked === false, r.body.slice(0, 160));
+
+  // Frist abgelaufen (set_at in der Vergangenheit): alle außer Inhaber werden
+  // ausgeloggt und am Login blockiert
+  setSetting('it_alarm', JSON.stringify({ active: true, text: 'Wartung am Freitag', set_by: hrhrUser.id, set_at: new Date(Date.now() - 10000).toISOString() }));
+  r = await get('/dashboard', lockUser);
+  ok('Meldung: nicht-Inhaber nach Ausloesung automatisch abgemeldet', r.status === 302 && r.location === '/login?locked=1&src=meldung', `${r.status} ${r.location}`);
+  r = await get('/login?locked=1');
+  ok('Meldung: Login-Seite zeigt Meldungstext', r.body.includes('Wartung am Freitag'));
+  r = await get('/dashboard', hrhrCookie);
+  ok('Meldung: Inhaber hat weiterhin Zugriff', r.status === 200 && r.body.includes('Meine Tickets'));
+  mockDiscord = { id: String(Date.now() + 4e6), username: 'fireduser', global_name: 'Fired', email: 'fired@example.com', verified: true };
+  const firedAuth = await get('/auth/discord');
+  const firedState = new URL(firedAuth.location).searchParams.get('state');
+  const firedCb = await get(`/auth/callback?code=FAKECODE&state=${firedState}`);
+  ok('Meldung: nicht-Inhaber-Login nach Ausloesung blockiert (403)', firedCb.status === 403, `status=${firedCb.status}`);
+
+  // Meldung aufheben -> Zugriff wieder für alle
   r = await post('/account/settings/admin/alarm', { action: 'clear' }, hrhrCookie);
-  ok('IT-Alarm: deaktiviert', r.status === 302);
-  r = await get('/', lockUser);
-  ok('IT-Alarm: Banner nach Deaktivierung weg', !r.body.includes('Wartung am Freitag'));
+  ok('Meldung: durch Inhaber aufgehoben', r.status === 302);
+  lockUser = await discordLogin('lockuser', 'LockUser', 'lock@example.com');
+  r = await get('/dashboard', lockUser);
+  ok('Meldung: Zugriff nach Aufhebung wieder da', r.status === 200 && r.body.includes('Meine Tickets'));
+  r = await get('/');
+  ok('Meldung: Banner nach Aufhebung weg', !r.body.includes('Wartung am Freitag'));
+  r = await get('/api/status');
+  statusJson = JSON.parse(r.body);
+  ok('API-Status: Meldung nach Aufhebung inaktiv', statusJson.meldung && statusJson.meldung.active === false, r.body.slice(0, 160));
 
   // Zugriff sperren: nur der Inhaber kommt weiter, alle anderen werden rausgeworfen
   r = await post('/account/settings/admin/lockdown', { action: 'enable', message: 'Wegen Wartung' }, hrhrCookie);
   ok('Lockdown: durch Inhaber aktiviert', r.status === 302);
   // Öffentlicher Status-Endpoint für die anderen Apps: liefert Sperr-Infos ohne Login
   r = await get('/api/status');
-  let statusJson = JSON.parse(r.body);
+  statusJson = JSON.parse(r.body);
   ok('API-Status: oeffentlich erreichbar', r.status === 200 && statusJson.lockdown && statusJson.lockdown.enabled === true, r.body.slice(0, 120));
   r = await get('/dashboard', lockUser);
   ok('Lockdown: anderer Nutzer wird sofort ausgeloggt', r.status === 302 && r.location === '/login?locked=1');

@@ -93,20 +93,27 @@
 
       <hr class="admin-sep">
 
-      <h3>IT-Alarm</h3>
+      <h3>Meldungen</h3>
       <% if (adminData.alarm && adminData.alarm.active) { %>
-        <p class="hint">Alarm ist <strong>aktiv</strong>: „<%= adminData.alarm.text %>"</p>
+        <p class="hint">
+          Meldung ist <strong>aktiv</strong>: „<%= adminData.alarm.text %>"
+          <% if (adminData.alarmFired) { %>
+            – Zugriff ist <strong>gesperrt</strong>, alle anderen wurden abgemeldet.
+          <% } else { %>
+            – alle Bearbeiter werden gleich automatisch abgemeldet.
+          <% } %>
+        </p>
         <form method="post" action="/account/settings/admin/alarm" class="inline-form">
           <input type="hidden" name="action" value="clear">
-          <button type="submit" class="btn btn-ghost">Alarm deaktivieren</button>
+          <button type="submit" class="btn btn-ghost">Meldung aufheben &amp; Zugriff freigeben</button>
         </form>
       <% } else { %>
-        <p class="hint">Setzt einen globalen Hinweis-Banner, der oben auf allen Seiten für alle eingeloggten Nutzer erscheint.</p>
+        <p class="hint">Setzt eine Meldung mit Alarmton für alle eingeloggten Bearbeiter. Nach 7,5&nbsp;Sekunden werden automatisch alle außer dir ausgeloggt und können sich erst wieder anmelden, wenn die Meldung aufgehoben ist.</p>
         <form method="post" action="/account/settings/admin/alarm" class="admin-form">
           <input type="hidden" name="action" value="set">
-          <label class="small">Alarm-Text *</label>
-          <input type="text" name="text" class="input" required placeholder="z. B. Achtung: Wartungsarbeiten am Freitag 18–20 Uhr">
-          <button type="submit" class="btn btn-primary">Alarm aktivieren</button>
+          <label class="small">Meldungstext *</label>
+          <input type="text" name="text" class="input" required placeholder="z. B. Achtung: Notfall – alle abmelden">
+          <button type="submit" class="btn btn-danger" data-confirm="Wirklich alle Bearbeiter abmelden? Nach 7,5 s werden alle außer dir ausgeloggt.">Meldung senden &amp; sperren</button>
         </form>
       <% } %>
 

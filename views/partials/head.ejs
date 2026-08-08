@@ -62,9 +62,67 @@
       <div class="alert <%= flash.type === 'error' ? 'alert-error' : 'alert-success' %>"><%= flash.text %></div>
     <% } %>
     <% if (itAlarm) { %>
-      <div class="alarm-banner" data-alarm="1">
-        <strong>⚠ IT-Alarm:</strong> <%= itAlarm.text %>
+      <div class="alarm-banner meldung" data-alarm="1"
+           data-deadline="<%= alarmDeadline || 0 %>"
+           data-root="<%= user && isRoot(user) ? '1' : '0' %>">
+        <strong>⚠ Meldung:</strong> <%= itAlarm.text %>
+        <% if (!alarmFired) { %>
+          <span class="alarm-countdown" data-countdown="1"></span>
+          <em class="alarm-sub">Alle Bearbeiter werden gleich automatisch abgemeldet.</em>
+        <% } else { %>
+          <em class="alarm-sub">Zugriff gesperrt – nur der Inhaber kann sich anmelden, bis die Meldung aufgehoben wird.</em>
+        <% } %>
       </div>
+      <script>
+        (function () {
+          var banner = document.querySelector('[data-alarm="1"]');
+          if (!banner) return;
+          var root = banner.getAttribute('data-root') === '1';
+          var deadline = parseInt(banner.getAttribute('data-deadline'), 10) || 0;
+          var fired = '<%= alarmFired ? "1" : "" %>' === '1';
+          // Alarmton (Web-Audio-Sirene) während der Frist
+          if (!fired) {
+            try {
+              var ctx = new (window.AudioContext || window.webkitAudioContext)();
+              var osc = ctx.createOscillator();
+              var gain = ctx.createGain();
+              osc.type = 'sawtooth';
+              gain.gain.setValueAtTime(0.12, ctx.currentTime);
+              osc.connect(gain);
+              gain.connect(ctx.destination);
+              var t0 = ctx.currentTime;
+              for (var i = 0; i < 6; i++) {
+                osc.frequency.setValueAtTime(620, t0 + i * 0.3);
+                osc.frequency.setValueAtTime(880, t0 + i * 0.3 + 0.15);
+              }
+              osc.start(t0);
+              osc.stop(t0 + 1.9);
+            } catch (e) {}
+          }
+          var counter = banner.querySelector('[data-countdown]');
+          if (counter && deadline) {
+            var tick = function () {
+              var left = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+              counter.textContent = 'Automatische Abmeldung in ' + left + ' s';
+              if (left > 0) setTimeout(tick, 200);
+            };
+            tick();
+          }
+          // Automatische Abmeldung nach Ablauf der Frist (nur eingeloggte, keine Inhaber)
+          var uid = document.body.getAttribute('data-user-id');
+          if (!root && uid && deadline) {
+            var delay = Math.max(0, deadline - Date.now());
+            setTimeout(function () {
+              var f = document.createElement('form');
+              f.method = 'post';
+              f.action = '/auth/logout';
+              f.style.display = 'none';
+              document.body.appendChild(f);
+              f.submit();
+            }, delay);
+          }
+        })();
+      </script>
     <% } %>
     <% if (lockdown && user && isRoot(user)) { %>
       <div class="alarm-banner lockdown">

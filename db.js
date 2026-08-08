@@ -283,8 +283,8 @@ const LOG_ACTION_LABELS = {
   hrhr_created: 'Inhaber angelegt',
   lockdown_enabled: 'Zugriff gesperrt',
   lockdown_disabled: 'Zugriff freigegeben',
-  alarm_set: 'IT-Alarm gesetzt',
-  alarm_cleared: 'IT-Alarm deaktiviert',
+  alarm_set: 'Meldung gesetzt',
+  alarm_cleared: 'Meldung aufgehoben',
   system_restart: 'Neustart',
   backups_cleared: 'Backups gelöscht',
   disabled: 'Deaktiviert',
@@ -330,6 +330,8 @@ const TICKET_ACTION_BY_TEXT = [
 ];
 const ACCOUNT_ACTION_BY_TEXT = [
   [/HR-HR-Account|Inhaber-Account/i, 'hrhr_created'],
+  [/Meldung aufgehoben/i, 'alarm_cleared'],
+  [/Meldung gesetzt/i, 'alarm_set'],
   [/IT-Alarm deaktiviert/i, 'alarm_cleared'],
   [/IT-Alarm gesetzt/i, 'alarm_set'],
   [/Backups manuell gelöscht/i, 'backups_cleared'],

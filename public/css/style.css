@@ -409,7 +409,7 @@ body.mrb-locked .mrb-lockable select {
   cursor: not-allowed;
 }
 
-/* ---------- IT-Alarm / Lockdown-Banner ---------- */
+/* ---------- Meldungen / Lockdown-Banner ---------- */
 .alarm-banner {
   display: flex;
   align-items: center;
@@ -427,6 +427,14 @@ body.mrb-locked .mrb-lockable select {
 }
 .alarm-banner.lockdown { border-color: rgba(239, 68, 68, 0.6); }
 .alarm-banner .alarm-sub { font-style: normal; font-size: 0.78rem; opacity: 0.75; }
+.alarm-banner .alarm-countdown {
+  font-weight: 600;
+  background: rgba(239, 68, 68, 0.18);
+  border: 1px solid rgba(239, 68, 68, 0.5);
+  border-radius: 6px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
 
 /* ---------- Admin-Optionen ---------- */
 .admin-options h3 { margin: 18px 0 8px; font-size: 1rem; }
