@@ -688,7 +688,7 @@ function findMail(subjectPart) {
   r = await get('/login?locked=1');
   ok('IT-Alarm: Login-Seite zeigt Sperrmeldung', r.body.includes('Wegen Wartung') && r.body.includes('IT-Alarm'));
   r = await get('/dashboard', hrhrCookie);
-  ok('IT-Alarm: Inhaber hat weiterhin Zugriff', r.status === 200 && r.body.includes('Meine Tickets'));
+  ok('IT-Alarm: Inhaber hat weiterhin Zugriff + hoert den Alarmton', r.status === 200 && r.body.includes('Meine Tickets') && r.body.includes('isRootUser = true') && r.body.includes('playAlarm'), `${r.status}`);
   r = await post('/account/settings/admin/lockdown', { action: 'disable' }, hrhrCookie);
   ok('IT-Alarm: durch Inhaber beendet', r.status === 302);
   r = await get('/api/status');
