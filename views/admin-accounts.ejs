@@ -173,7 +173,7 @@
           <% logs.forEach((l) => { %>
             <tr>
               <td class="muted small"><%= fmtDate(l.created_at) %></td>
-              <td><span class="tag log-<%= l.action %>"><%= l.action %></span></td>
+              <td><span class="tag log-<%= l.action || 'unbekannt' %>"><%= l.action || 'unbekannt' %></span></td>
               <td><%= l.account_name || '–' %></td>
               <td><%= l.actor_name || '–' %></td>
               <td class="small"><%= l.reason || '–' %></td>

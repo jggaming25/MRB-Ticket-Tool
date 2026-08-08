@@ -304,6 +304,9 @@ function findMail(subjectPart) {
   ok('Claim: claimed_by gesetzt + Status pending', claimedTicket.claimed_by === hrUser.id && claimedTicket.status === 'pending', `by=${claimedTicket.claimed_by} status=${claimedTicket.status}`);
   ok('Claim: Faelligkeit wurde gesetzt', !!claimedTicket.due_at, claimedTicket.due_at || 'fehlt');
 
+  r = await get(ticketUrl, hrCookie);
+  ok('Bearbeiter sieht "Freigeben"-Button nach Übernahme', r.body.includes('Freigeben'), 'Freigeben fehlt');
+
   r = await post(ticketUrl + '/message', { body: 'HR-HR versucht zu antworten' }, hrhrCookie);
   ok('Geclaimt: anderer HR darf nicht antworten (403)', r.status === 403);
   r = await post(`/admin/tickets/${ticketId}/status`, { status: 'pending' }, hrhrCookie);
@@ -383,10 +386,20 @@ function findMail(subjectPart) {
   const reopened = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId);
   ok('Reopen: Status open', reopened.status === 'open');
 
-  // Inhaber kann ein Ticket sofort schliessen, ohne dass Team erst freigibt
+  // Inhaber: ohne Freigabe-Status kommt eine Vorwarnung (Ticket bleibt offen),
+  // erst nach Bestätigung (force=1) wird geschlossen.
   r = await post(ticketUrl + '/close', {}, hrhrCookie);
+  const afterWarn = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId);
+  ok('Inhaber: Schliessen ohne Freigabe -> Vorwarnung, Ticket bleibt offen', r.status === 302 && afterWarn.status === 'open', `status=${afterWarn.status}`);
+  r = await post(ticketUrl + '/close', { force: '1' }, hrhrCookie);
   const instantClosed = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId);
-  ok('Inhaber: Ticket sofort schliessen (ohne Freigabe)', r.status === 302 && instantClosed.status === 'closed');
+  ok('Inhaber: nach Bestaetigung (force) geschlossen', r.status === 302 && instantClosed.status === 'closed', `status=${instantClosed.status}`);
+
+  // Geschlossene Tickets dürfen nicht mehr freigegeben werden
+  r = await post(`/admin/tickets/${ticketId}/release`, {}, hrCookie);
+  const closedForRelease = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId);
+  ok('Geschlossenes Ticket: Freigabe abgelehnt', r.status === 302 && closedForRelease.status === 'closed', `status=${closedForRelease.status}`);
+
   r = await post(ticketUrl + '/reopen', {}, hrhrCookie);
   ok('Inhaber: wieder geoeffnet', r.status === 302);
 
@@ -492,6 +505,13 @@ function findMail(subjectPart) {
   const logCount = db.prepare('SELECT COUNT(*) AS c FROM account_logs').get().c;
   ok('Audit-Log protokolliert Konto-Aktionen', logCount >= 5, `Eintraege: ${logCount}`);
 
+  // Leere Aktion in der Vergangenheit: Die UI zeigt einen Fallback statt einer leeren Spalte
+  db.prepare("INSERT INTO account_logs (account_id, actor_id, action, reason) VALUES (?, ?, '', 'Test leerer Action')").run(normalUser.id, hrhrUser.id);
+  r = await get('/admin/accounts', hrhrCookie);
+  ok('Audit-Log: leere Aktion zeigt Fallback statt nichts', r.body.includes('unbekannt'), 'unbekannt fehlt');
+  r = await get('/admin/logs', hrhrCookie);
+  ok('Audit-Log-Seite: leere Aktion zeigt Fallback', r.body.includes('unbekannt'));
+
   // ==================================================================
   // 8) Kontoeinstellungen + Benachrichtigungen
   // ==================================================================
@@ -566,16 +586,23 @@ function findMail(subjectPart) {
   ok('IT-Alarm: Banner nach Deaktivierung weg', !r.body.includes('Wartung am Freitag'));
 
   // Zugriff sperren: nur der Inhaber kommt weiter, alle anderen werden rausgeworfen
-  r = await post('/account/settings/admin/lockdown', { action: 'enable', message: '' }, hrhrCookie);
+  r = await post('/account/settings/admin/lockdown', { action: 'enable', message: 'Wegen Wartung' }, hrhrCookie);
   ok('Lockdown: durch Inhaber aktiviert', r.status === 302);
+  // Öffentlicher Status-Endpoint für die anderen Apps: liefert Sperr-Infos ohne Login
+  r = await get('/api/status');
+  let statusJson = JSON.parse(r.body);
+  ok('API-Status: oeffentlich erreichbar', r.status === 200 && statusJson.lockdown && statusJson.lockdown.enabled === true, r.body.slice(0, 120));
   r = await get('/dashboard', lockUser);
   ok('Lockdown: anderer Nutzer wird sofort ausgeloggt', r.status === 302 && r.location === '/login?locked=1');
   r = await get('/login?locked=1');
-  ok('Lockdown: Login-Seite zeigt Sperrmeldung', r.body.includes('Der Zugriff auf das System wurde gerade für alle Bearbeiter gesperrt.'));
+  ok('Lockdown: Login-Seite zeigt Sperrmeldung', r.body.includes('Wegen Wartung'));
   r = await get('/dashboard', hrhrCookie);
   ok('Lockdown: Inhaber hat weiterhin Zugriff', r.status === 200 && r.body.includes('Meine Tickets'));
   r = await post('/account/settings/admin/lockdown', { action: 'disable' }, hrhrCookie);
   ok('Lockdown: durch Inhaber wieder freigegeben', r.status === 302);
+  r = await get('/api/status');
+  statusJson = JSON.parse(r.body);
+  ok('API-Status: nach Freigabe wieder offen', statusJson.lockdown && statusJson.lockdown.enabled === false);
 
   // Nicht-Inhaber darf Admin-Optionen nicht nutzen
   r = await post('/account/settings/admin/restart', {}, userCookie);

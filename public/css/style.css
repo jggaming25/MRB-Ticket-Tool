@@ -241,7 +241,7 @@ main {
 .status-pending { background: var(--yellow-bg); color: #fcd34d; }
 .status-release { background: var(--green-bg); color: #86efac; }
 .status-overdue { background: var(--red-bg); color: #fca5a5; }
-.status-closed { background: var(--card-2); color: var(--muted); }
+.status-closed { background: var(--red-bg); color: #fca5a5; text-decoration: line-through; }
 .prio-low { background: var(--card-2); color: var(--muted); }
 .prio-medium { background: var(--yellow-bg); color: #fcd34d; }
 .prio-high { background: var(--green-bg); color: #86efac; }
@@ -278,9 +278,21 @@ main {
 .acc-disabled { background: var(--red-bg); color: #fca5a5; }
 .acc-deleted { background: var(--card-2); color: var(--muted); text-decoration: line-through; }
 
-/* Audit-Log */
-.log-invited, .log-enabled, .log-activated, .log-hrhr_created { background: var(--green-bg); color: #86efac; }
-.log-disabled, .log-deleted { background: var(--red-bg); color: #fca5a5; }
+/* Audit-Log: jede Aktion erhaelt eine Farbe (Default grau, bekannte gruppiert) */
+.log-invited, .log-enabled, .log-activated, .log-hrhr_created, .log-enabled_auto,
+.log-reopened, .log-created, .log-claimed, .log-lockdown_disabled, .log-note_added {
+  background: var(--green-bg); color: #86efac;
+}
+.log-disabled, .log-disabled_auto, .log-deleted, .log-deleted_auto,
+.log-closed, .log-lockdown_enabled, .log-alarm_set, .log-system_restart {
+  background: var(--red-bg); color: #fca5a5;
+}
+.log-role_changed, .log-reply, .log-status, .log-due_set, .log-transferred,
+.log-release_requested, .log-alarm_cleared, .log-backups_cleared, .log-unclaimed {
+  background: var(--blue-bg); color: #93c5fd;
+}
+.log-unbekannt, .tag.log-unbekannt { background: var(--card-2); color: var(--muted); }
+.log-disabled_auto, .log-deleted_auto { text-decoration: line-through; }
 
 /* Account-Aktionen */
 .acc-actions { position: relative; }
@@ -466,8 +478,8 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--p
   border-radius: var(--radius);
   padding: 12px 14px;
 }
-.msg-owner { border-color: rgba(250, 204, 21, 0.6); background: rgba(250, 204, 21, 0.07); }
-.msg-staff { border-color: rgba(88, 101, 242, 0.45); }
+.msg-owner { border-color: rgba(250, 204, 21, 0.6); background: rgba(250, 204, 21, 0.10); }
+.msg-staff { border-color: rgba(88, 101, 242, 0.45); background: rgba(88, 101, 242, 0.08); }
 .msg-system {
   justify-content: center;
   background: transparent;

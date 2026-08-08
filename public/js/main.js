@@ -32,6 +32,19 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
+  // Vorwarnung für Formulare (data-force-confirm): Erst nach Bestätigung wird
+  // das versteckte "force"-Feld auf 1 gesetzt (z. B. vorzeitiges Schließen).
+  document.querySelectorAll('form[data-force-confirm]').forEach((form) => {
+    form.addEventListener('submit', (e) => {
+      if (!window.confirm(form.dataset.forceConfirm)) {
+        e.preventDefault();
+        return;
+      }
+      const force = form.querySelector('input[name="force"]');
+      if (force) force.value = '1';
+    });
+  });
+
   // Klickbare Ticket-Zeilen (data-ticket-id / data-ticket-url)
   document.querySelectorAll('.clickable[data-ticket-id]').forEach((row) => {
     row.addEventListener('click', () => {

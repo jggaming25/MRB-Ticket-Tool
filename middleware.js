@@ -170,7 +170,7 @@ function lockdownGuard(req, res, next) {
   // Öffentliche Seiten (Startseite, Login, statische Dateien) bleiben
   // erreichbar, damit die Sperrmeldung sichtbar ist.
   if (req.path === '/' || req.path === '/login' || req.path === '/sw.js' ||
-      req.path === '/impressum' || req.path === '/datenschutz' ||
+      req.path === '/impressum' || req.path === '/datenschutz' || req.path === '/api/status' ||
       req.path.startsWith('/auth/') || req.path.startsWith('/static/')) return next();
   req.session.destroy(() => {});
   res.locals.user = null;

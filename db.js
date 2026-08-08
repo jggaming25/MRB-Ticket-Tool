@@ -264,6 +264,17 @@ migrateUsers();
 migrateTickets();
 migrateMessages();
 
+// Bereinigt alte/leere Audit-Log-Eintraege: Wenn die Aktion fehlt, wird ein
+// Platzhalter gesetzt, damit in der UI keine leere "Aktion"-Spalte erscheint.
+function migrateLogActions() {
+  const fix = (table) => db.prepare(
+    `UPDATE ${table} SET action = 'unbekannt' WHERE action IS NULL OR trim(action) = ''`
+  ).run();
+  try { fix('account_logs'); } catch {}
+  try { fix('ticket_logs'); } catch {}
+}
+migrateLogActions();
+
 const stmts = {
   nextNumber: db.prepare('SELECT COALESCE(MAX(number), 0) + 1 AS next FROM tickets'),
 };

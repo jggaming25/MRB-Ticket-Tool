@@ -263,14 +263,13 @@ function customerEmailOf(ticket) {
   return u && u.email ? u.email : null;
 }
 
-async function notifyCustomer(ticket, subject, summary) {
+// E-Mail an den Kunden (fire-and-forget: Der SMTP-Versand darf den Request
+// nicht blockieren, sonst dauert z. B. das Schließen eines Tickets u. U. 45s).
+function notifyCustomer(ticket, subject, summary) {
   const to = customerEmailOf(ticket);
   if (!to) return;
-  try {
-    await mailer.sendTicketActivity(to, ticket.number, ticket.subject, summary);
-  } catch (err) {
-    console.error('Kundenmail fehlgeschlagen:', err.message);
-  }
+  mailer.sendTicketActivity(to, ticket.number, ticket.subject, summary)
+    .catch((err) => console.error('Kundenmail fehlgeschlagen:', err.message));
 }
 
 // Web-Push an den Ticket-Besitzer (funktioniert auch, wenn die Website
@@ -709,6 +708,32 @@ app.get('/', (req, res) => {
   });
 });
 
+// Öffentlicher Status-Endpoint für die anderen Apps (Anwesenheits-Tool,
+// MRB-OnlineBefehl): Sie prüfen hier, ob der Inhaber die Zugriffssperre
+// (Lockdown / IT-Alarm) ausgelöst hat und sperren sich dann selbst.
+app.get('/api/status', (req, res) => {
+  const lock = getLockdown();
+  let alarm = null;
+  try { alarm = JSON.parse(getSetting('it_alarm') || 'null'); } catch { alarm = null; }
+  const alarmActive = alarm && alarm.active ? alarm : null;
+  res.set('Access-Control-Allow-Origin', '*');
+  res.set('Cache-Control', 'no-store');
+  res.json({
+    app: 'mrb-tickets',
+    lockdown: {
+      enabled: !!(lock && lock.enabled),
+      message: (lock && lock.message) || '',
+      set_by: (lock && lock.set_by) || null,
+      set_at: (lock && lock.set_at) || null,
+    },
+    itAlarm: {
+      active: !!alarmActive,
+      text: (alarmActive && alarmActive.text) || '',
+    },
+    ts: new Date().toISOString(),
+  });
+});
+
 app.get('/impressum', (req, res) => {
   res.render('impressum', { title: 'Impressum' });
 });
@@ -879,11 +904,8 @@ app.post('/tickets', requireLogin, ticketCreateLimiter, upload.single('attachmen
   // Kunde per E-Mail benachrichtigen (sofern im Discord-Konto E-Mail hinterlegt)
   const customerEmail = customerEmailOf({ user_id: req.user.id });
   if (customerEmail) {
-    try {
-      await mailer.sendTicketCreated(customerEmail, number, subjectTrim);
-    } catch (err) {
-      console.error('Bestätigungsmail fehlgeschlagen:', err.message);
-    }
+    mailer.sendTicketCreated(customerEmail, number, subjectTrim)
+      .catch((err) => console.error('Bestätigungsmail fehlgeschlagen:', err.message));
   }
 
   // Push-Benachrichtigung an alle HR/HR-HR (ohne den Ersteller), damit neue
@@ -924,9 +946,10 @@ app.get('/tickets/:id', requireLogin, loadTicketFor, (req, res) => {
 
   const isClosed = ticket.status === 'closed';
 
-  // Verwaltungs-Aktionen (schließen, freigeben, übernehmen, Fälligkeit …) nur
-  // sichtbar, wenn das Ticket über "Alle Tickets" (Admin) geöffnet wurde.
-  const fromAdmin = req.query.ctx === 'admin';
+  // Verwaltungs-Aktionen (schließen, freigeben, übernehmen, Fälligkeit …) für
+  // HR/HR-HR immer sichtbar (auch aus dem Dashboard heraus). Kunden sehen sie
+  // nicht – sie öffnen Tickets nie mit ?ctx=admin.
+  const fromAdmin = req.query.ctx === 'admin' || isHR(req.user);
 
   // HR/HR-HR-Accounts als Übergabe-Ziele
   const staffUsers = fromAdmin && isHR(req.user)
@@ -949,8 +972,11 @@ app.get('/tickets/:id', requireLogin, loadTicketFor, (req, res) => {
     fromAdmin,
     canClaim: fromAdmin && isHR(req.user) && !ticket.claimed_by && !isClosed,
     canUnclaim: fromAdmin && isHR(req.user) && ticket.claimed_by === req.user.id,
-    // HR-Bearbeiter gibt nach der Übernahme frei; HR-HR schliesst.
-    canRelease: fromAdmin && isHR(req.user) && !isHRHR(req.user) && ticket.status === 'pending' && ticket.claimed_by === req.user.id,
+    // HR-Bearbeiter gibt nach der Übernahme frei; HR-HR schliesst. Der Button
+    // ist für den Bearbeiter immer sichtbar, solange er das Ticket übernommen
+    // hat und es weder geschlossen noch bereits zur Freigabe vorgelegt ist.
+    canRelease: fromAdmin && isHR(req.user) && !isHRHR(req.user) && !isClosed &&
+      ticket.status !== 'release' && ticket.claimed_by === req.user.id,
     canSetDue: fromAdmin && canEdit && !isClosed,
     canClose: fromAdmin && isHRHR(req.user) && !isClosed,
     canReopen: fromAdmin && isHRHR(req.user) && isClosed,
@@ -1023,11 +1049,18 @@ app.post('/tickets/:id/message', requireLogin, loadTicketFor, upload.single('att
   res.redirect(`/tickets/${ticket.id}#last`);
 });
 
-// Schließen: ausschliesslich HR-HR und nur wenn das Ticket zur Freigabe steht.
+// Schließen: ausschliesslich HR-HR. Ohne Vorwarnung nur, wenn das Ticket zur
+// Freigabe steht (Status "release"); andernfalls muss force=1 bestätigt werden.
 app.post('/tickets/:id/close', requireHRHR, loadTicketFor, async (req, res) => {
   const { ticket } = req;
   if (ticket.status === 'closed') {
     flash(req, 'error', 'Das Ticket ist bereits geschlossen.');
+    return res.redirect(`/tickets/${ticket.id}`);
+  }
+  if (ticket.status !== 'release' && req.body.force !== '1') {
+    flash(req, 'error',
+      'Vorwarnung: Das Ticket wurde nicht vom Bearbeiter zur Freigabe vorgelegt. ' +
+      'Bestätige das Schließen erneut, um es trotzdem zu schließen.');
     return res.redirect(`/tickets/${ticket.id}`);
   }
   const now = new Date().toISOString();
@@ -1270,15 +1303,12 @@ app.post('/admin/tickets/:id/transfer', requireHR, loadTicketFor, async (req, re
   insertSystemMessage(ticket.id,
     `Ticket von ${fromName} an ${target.global_name || target.username} übergeben.${reason ? ` Begründung: ${reason}` : ''}`);
 
-  // E-Mail an den neuen Bearbeiter + Kunden-Info
+  // E-Mail an den neuen Bearbeiter + Kunden-Info (fire-and-forget)
   if (target.email) {
-    try {
-      await mailer.sendTicketAssignedToHR(target.email, ticket.number, ticket.subject, fromName);
-    } catch (err) {
-      console.error('Übergabe-Mail fehlgeschlagen:', err.message);
-    }
+    mailer.sendTicketAssignedToHR(target.email, ticket.number, ticket.subject, fromName)
+      .catch((err) => console.error('Übergabe-Mail fehlgeschlagen:', err.message));
   }
-  await notifyCustomer(ticket, ticket.subject, 'Dein Ticket wurde an einen anderen Mitarbeiter übergeben.');
+  notifyCustomer(ticket, ticket.subject, 'Dein Ticket wurde an einen anderen Mitarbeiter übergeben.');
 
   flash(req, 'success', `Ticket an ${target.global_name || target.username} übergeben.`);
   res.redirect(`/tickets/${ticket.id}`);
@@ -1289,8 +1319,12 @@ app.post('/admin/tickets/:id/transfer', requireHR, loadTicketFor, async (req, re
 // ---------------------------------------------------------------------------
 app.post('/admin/tickets/:id/release', requireHR, loadTicketFor, async (req, res) => {
   const { ticket } = req;
-  if (ticket.status !== 'pending') {
-    flash(req, 'error', 'Nur Tickets "In Bearbeitung" können freigegeben werden.');
+  if (ticket.status === 'closed') {
+    flash(req, 'error', 'Geschlossene Tickets können nicht freigegeben werden.');
+    return res.redirect(`/tickets/${ticket.id}`);
+  }
+  if (ticket.status === 'release') {
+    flash(req, 'error', 'Das Ticket ist bereits zur Freigabe vorgelegt.');
     return res.redirect(`/tickets/${ticket.id}`);
   }
   if (ticket.claimed_by !== req.user.id) {
@@ -1464,7 +1498,8 @@ app.get('/admin/logs', requireRoot, (req, res) => {
   }
 
   // Alle bisher bekannten Aktionen für das Dropdown
-  const actions = db.prepare('SELECT DISTINCT action FROM account_logs UNION SELECT DISTINCT action FROM ticket_logs ORDER BY action').all().map((r) => r.action);
+  const actions = db.prepare('SELECT DISTINCT action FROM account_logs UNION SELECT DISTINCT action FROM ticket_logs ORDER BY action')
+    .all().map((r) => r.action).filter((a) => a && a.trim());
 
   res.render('admin-logs', {
     title: 'Audit-Log',

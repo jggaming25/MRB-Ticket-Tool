@@ -7,3 +7,5 @@ mail-log/
 backups/
 npm-debug.log*
 .DS_Store
+Anwesenheits-Tool/
+MRB-OnlineBefehl/
