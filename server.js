@@ -11,10 +11,11 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const multer = require('multer');
 
-const { db, isRemote, DB_PATH: dbPaths, nextTicketNumber, insertSystemMessage, logAccountAction, logTicketAction } = require('./db');
+const { db, isRemote, DB_PATH: dbPaths, nextTicketNumber, insertSystemMessage, logAccountAction, logTicketAction, addAccountNote } = require('./db');
 const discord = require('./discord');
 const mailer = require('./mailer');
 const config = require('./config');
+const push = require('./push');
 const {
   loadUser,
   requireLogin,
@@ -135,6 +136,8 @@ app.use((req, res, next) => {
   res.locals.brand = config.brand;
   res.locals.logo = config.logo;
   res.locals.config = config;
+  res.locals.pushEnabled = push.isConfigured();
+  res.locals.pushPublicKey = push.vapidPublicKey;
   res.locals.isRoot = (u) => isRoot(u);
   res.locals.isOverdue = isOverdue;
   res.locals.accountStatusLabel = (s) => STATUS_LABELS[s] || s;
@@ -155,6 +158,14 @@ app.use((req, res, next) => {
 });
 
 app.use('/static', express.static(path.join(__dirname, 'public')));
+
+// Service Worker im Root ausliefern, damit sein Scope "/" gilt
+// (notwendig für zuverlässige Push-Benachrichtigungen).
+app.get('/sw.js', (req, res) => {
+  res.set('Content-Type', 'application/javascript');
+  res.set('Service-Worker-Allowed', '/');
+  res.sendFile(path.join(__dirname, 'public', 'sw.js'));
+});
 
 // ---------------------------------------------------------------------------
 // Uploads
@@ -205,13 +216,28 @@ function customerEmailOf(ticket) {
   return u && u.email ? u.email : null;
 }
 
-async function notifyCustomer(ticket, subject, summary) {
+async function notifyCustomer(ticket, subject, summary, opts = {}) {
   const to = customerEmailOf(ticket);
-  if (!to) return;
-  try {
-    await mailer.sendTicketActivity(to, ticket.number, ticket.subject, summary);
-  } catch (err) {
-    console.error('Kundenmail fehlgeschlagen:', err.message);
+  if (to) {
+    try {
+      await mailer.sendTicketActivity(to, ticket.number, ticket.subject, summary);
+    } catch (err) {
+      console.error('Kundenmail fehlgeschlagen:', err.message);
+    }
+  }
+  // Web-Push an den Ticket-Besitzer (funktioniert auch, wenn die Website
+  // geschlossen ist, solange der Browser läuft). Nur wenn dieser die
+  // Benachrichtigungen in den Kontoeinstellungen aktiviert hat und die
+  // Änderung nicht von ihm selbst stammt.
+  if (ticket && ticket.user_id && opts.skipPushTo !== ticket.user_id) {
+    const owner = db.prepare('SELECT notify_changes FROM users WHERE id = ?').get(ticket.user_id);
+    if (owner && owner.notify_changes === 1) {
+      push.sendToUser(ticket.user_id, {
+        title: `Ticket #${String(ticket.number).padStart(4, '0')}: ${subject}`,
+        body: summary,
+        url: `${BASE_URL}/tickets/${ticket.id}`,
+      });
+    }
   }
 }
 
@@ -472,6 +498,26 @@ app.get('/api/tickets/updates', requireLogin, (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// Web-Push: Subscription verwalten
+// ---------------------------------------------------------------------------
+app.post('/api/push/subscribe', requireLogin, (req, res) => {
+  const { subscription } = req.body || {};
+  if (!push.isConfigured()) {
+    return res.status(503).json({ error: 'Push-Benachrichtigungen sind nicht konfiguriert.' });
+  }
+  if (!push.saveSubscription(req.user.id, subscription)) {
+    return res.status(400).json({ error: 'Ungültige Push-Subscription.' });
+  }
+  res.json({ ok: true });
+});
+
+app.post('/api/push/unsubscribe', requireLogin, (req, res) => {
+  const { endpoint } = req.body || {};
+  push.removeSubscription(endpoint);
+  res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
 // Onboarding wurde entfernt: Es gibt keine Einladungen, keine Passwort-Setups
 // und kein Passwort-Login mehr. Die Anmeldung laeuft ausschliesslich ueber
 // Discord, und jeder Account ist direkt nach dem Login aktiv.
@@ -519,12 +565,31 @@ app.get('/datenschutz', (req, res) => {
 
 app.get('/dashboard', requireLogin, (req, res) => {
   const quickNumber = String(req.query.number || '').trim();
+  const status = req.query.status || 'all';
+  const sort = req.query.sort || 'updated';
+  const search = String(req.query.search || '').trim();
+
+  const where = ['t.user_id = ?'];
+  const params = [req.user.id];
+  if (status !== 'all') { where.push('t.status = ?'); params.push(status); }
+  if (search) {
+    const numSearch = /^\d+$/.test(search) ? String(Number(search)) : null;
+    const like = `%${search}%`;
+    where.push('(CAST(t.number AS TEXT) = ? OR printf(\'%04d\', t.number) = ? OR t.subject LIKE ?)');
+    params.push(numSearch, search, like);
+  }
+  let orderBy = 't.updated_at DESC';
+  if (sort === 'created') orderBy = 't.created_at DESC';
+  else if (sort === 'status') {
+    orderBy = 'CASE t.status WHEN \'open\' THEN 0 WHEN \'pending\' THEN 1 WHEN \'release\' THEN 2 ELSE 3 END, t.updated_at DESC';
+  }
+
   const myTickets = db.prepare(`
     SELECT t.*, u.username, u.global_name, u.avatar
     FROM tickets t JOIN users u ON u.id = t.user_id
-    WHERE t.user_id = ?
-    ORDER BY t.updated_at DESC
-  `).all(req.user.id);
+    WHERE ${where.join(' AND ')}
+    ORDER BY ${orderBy}
+  `).all(...params);
 
   for (const t of myTickets) markOverdue(t);
 
@@ -536,43 +601,39 @@ app.get('/dashboard', requireLogin, (req, res) => {
     openCount,
     quickNumber,
     quickError: null,
+    status,
+    sort,
+    search,
   });
 });
 
 // Schnellsprung: Ticketnummer im Dashboard-Eingabefeld -> direkt zum Ticket
 app.post('/dashboard/jump', requireLogin, (req, res) => {
   const input = String(req.body.number || '').trim().replace(/^#/, '');
+  const renderBase = (quickNumber, quickError) => res.render('dashboard', {
+    title: 'Meine Tickets',
+    myTickets: db.prepare(`
+      SELECT t.*, u.username, u.global_name, u.avatar
+      FROM tickets t JOIN users u ON u.id = t.user_id
+      WHERE t.user_id = ? ORDER BY t.updated_at DESC
+    `).all(req.user.id),
+    openCount: db.prepare(`
+      SELECT COUNT(*) AS c FROM tickets WHERE user_id = ? AND status != 'closed'
+    `).get(req.user.id).c,
+    status: 'all',
+    sort: 'updated',
+    search: '',
+    quickNumber,
+    quickError,
+  });
+
   if (!/^\d+$/.test(input)) {
-    return res.render('dashboard', {
-      title: 'Meine Tickets',
-      myTickets: db.prepare(`
-        SELECT t.*, u.username, u.global_name, u.avatar
-        FROM tickets t JOIN users u ON u.id = t.user_id
-        WHERE t.user_id = ? ORDER BY t.updated_at DESC
-      `).all(req.user.id),
-      openCount: db.prepare(`
-        SELECT COUNT(*) AS c FROM tickets WHERE user_id = ? AND status != 'closed'
-      `).get(req.user.id).c,
-      quickNumber: input,
-      quickError: 'Bitte eine gültige Ticketnummer eingeben (z. B. 0042).',
-    });
+    return renderBase(input, 'Bitte eine gültige Ticketnummer eingeben (z. B. 0042).');
   }
 
   const ticket = db.prepare('SELECT * FROM tickets WHERE number = ?').get(Number(input));
   if (!ticket) {
-    return res.render('dashboard', {
-      title: 'Meine Tickets',
-      myTickets: db.prepare(`
-        SELECT t.*, u.username, u.global_name, u.avatar
-        FROM tickets t JOIN users u ON u.id = t.user_id
-        WHERE t.user_id = ? ORDER BY t.updated_at DESC
-      `).all(req.user.id),
-      openCount: db.prepare(`
-        SELECT COUNT(*) AS c FROM tickets WHERE user_id = ? AND status != 'closed'
-      `).get(req.user.id).c,
-      quickNumber: input,
-      quickError: `Es wurde kein Ticket mit der Nummer #${input} gefunden.`,
-    });
+    return renderBase(input, `Es wurde kein Ticket mit der Nummer #${input} gefunden.`);
   }
 
   const allowed = isHR(req.user) || ticket.user_id === req.user.id;
@@ -777,7 +838,8 @@ app.post('/tickets/:id/message', requireLogin, loadTicketFor, upload.single('att
 
   logTicketAction(ticket.id, req.user.id, 'reply', `Nachricht von ${isStaff ? 'Support' : 'Kunde'}`);
   await notifyCustomer({ ...ticket, user_id: ticket.user_id }, ticket.subject,
-    isStaff ? 'Der Support hat auf dein Ticket geantwortet.' : 'Deine Antwort wurde gespeichert.');
+    isStaff ? 'Der Support hat auf dein Ticket geantwortet.' : 'Deine Antwort wurde gespeichert.',
+    { skipPushTo: req.user.id });
 
   res.redirect(`/tickets/${ticket.id}#last`);
 });
@@ -1156,7 +1218,7 @@ app.get('/admin/accounts', requireRoot, (req, res) => {
   };
 
   res.render('admin-accounts', {
-    title: 'Team-Verwaltung',
+    title: 'Nutzerverwaltung',
     users,
     logs,
     stats,
@@ -1169,34 +1231,67 @@ app.get('/admin/accounts', requireRoot, (req, res) => {
 // Vollstaendiges Audit-Log aller Account-Aktionen (nur Root-HR-HR)
 app.get('/admin/logs', requireRoot, (req, res) => {
   const filter = req.query.filter || 'all';
-  const where = [];
-  const params = [];
-  if (filter === 'account') where.push("l.action IN ('disabled','enabled','deleted','role_changed','activated','hrhr_created')");
-  if (filter === 'ticket') where.push('l.action IN (SELECT DISTINCT action FROM ticket_logs)');
-  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const action = req.query.action || 'all';
+  const user = String(req.query.user || '').trim();
+  const days = Math.max(0, Number(req.query.days) || 0);
+  const since = days > 0 ? new Date(Date.now() - days * 24 * 3600 * 1000).toISOString() : null;
+  const sinceSql = since ? ' AND l.created_at >= ?' : '';
+  const userLike = user ? `%${user}%` : null;
 
-  const accountLogs = db.prepare(`
-    SELECT l.*, a.username AS account_name, ar.username AS actor_name, ar.global_name AS actor_global
-    FROM account_logs l
-    LEFT JOIN users a ON a.id = l.account_id
-    LEFT JOIN users ar ON ar.id = l.actor_id
-    ${filter === 'ticket' ? 'WHERE 1=0' : whereSql}
-    ORDER BY l.id DESC LIMIT 300
-  `).all(...params);
+  let accountLogs = [];
+  let ticketLogs = [];
 
-  const ticketLogs = db.prepare(`
-    SELECT l.*, t.number AS ticket_number, ar.username AS actor_name, ar.global_name AS actor_global
-    FROM ticket_logs l
-    LEFT JOIN tickets t ON t.id = l.ticket_id
-    LEFT JOIN users ar ON ar.id = l.actor_id
-    ORDER BY l.id DESC LIMIT 300
-  `).all();
+  if (filter !== 'ticket') {
+    const where = [];
+    const p = [];
+    if (action !== 'all' && action !== 'ticket') { where.push('l.action = ?'); p.push(action); }
+    if (userLike) {
+      where.push('(a.username LIKE ? OR a.global_name LIKE ? OR ar.username LIKE ? OR ar.global_name LIKE ?)');
+      p.push(userLike, userLike, userLike, userLike);
+    }
+    if (since) p.push(since);
+    accountLogs = db.prepare(`
+      SELECT l.*, a.username AS account_name, a.global_name AS account_global,
+             ar.username AS actor_name, ar.global_name AS actor_global
+      FROM account_logs l
+      LEFT JOIN users a ON a.id = l.account_id
+      LEFT JOIN users ar ON ar.id = l.actor_id
+      WHERE ${where.length ? where.join(' AND ') : '1=1'}${sinceSql}
+      ORDER BY l.id DESC LIMIT 300
+    `).all(...p);
+  }
+
+  if (filter !== 'account') {
+    const where = [];
+    const p = [];
+    if (action !== 'all' && action !== 'account') { where.push('l.action = ?'); p.push(action); }
+    if (userLike) {
+      where.push('(ar.username LIKE ? OR ar.global_name LIKE ?)');
+      p.push(userLike, userLike);
+    }
+    if (since) p.push(since);
+    ticketLogs = db.prepare(`
+      SELECT l.*, t.number AS ticket_number, ar.username AS actor_name, ar.global_name AS actor_global
+      FROM ticket_logs l
+      LEFT JOIN tickets t ON t.id = l.ticket_id
+      LEFT JOIN users ar ON ar.id = l.actor_id
+      WHERE ${where.length ? where.join(' AND ') : '1=1'}${sinceSql}
+      ORDER BY l.id DESC LIMIT 300
+    `).all(...p);
+  }
+
+  // Alle bisher bekannten Aktionen für das Dropdown
+  const actions = db.prepare('SELECT DISTINCT action FROM account_logs UNION SELECT DISTINCT action FROM ticket_logs ORDER BY action').all().map((r) => r.action);
 
   res.render('admin-logs', {
     title: 'Audit-Log',
     accountLogs,
     ticketLogs,
     filter,
+    action,
+    user,
+    days,
+    actions,
   });
 });
 
@@ -1214,16 +1309,77 @@ app.post('/admin/accounts/:id/disable', requireRoot, (req, res) => {
     return res.redirect('/admin/accounts');
   }
 
+  const duration = req.body.duration;
+  let disableUntil = null;
+  if (duration === 'custom') {
+    const raw = String(req.body.disable_until || '').trim();
+    if (!raw) {
+      flash(req, 'error', 'Bitte gib den Zeitpunkt der automatischen Freigabe an (oder wähle "Manuell").');
+      return res.redirect('/admin/accounts');
+    }
+    const d = new Date(raw);
+    if (Number.isNaN(d.getTime())) {
+      flash(req, 'error', 'Ungültiges Freigabe-Datum.');
+      return res.redirect('/admin/accounts');
+    }
+    disableUntil = d.toISOString();
+  }
+
   db.prepare(`
     UPDATE users SET status = 'disabled', disabled_reason = ?, disabled_at = datetime('now'),
-        disabled_by = ?, updated_at = datetime('now')
+        disabled_by = ?, disable_until = ?, updated_at = datetime('now')
     WHERE id = ?
-  `).run(reason, req.user.id, target.id);
+  `).run(reason, req.user.id, disableUntil, target.id);
 
   if (target.email) mailer.sendAccountDisabled(target.email, reason);
-  logAccountAction(target.id, req.user.id, 'disabled', reason);
+  logAccountAction(target.id, req.user.id, 'disabled',
+    `${reason}${disableUntil ? ` (automatische Freigabe: ${new Date(disableUntil).toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short' })})` : ' (nur manuelle Freigabe)'}`);
 
   flash(req, 'success', `Konto von ${target.username} deaktiviert. E-Mail wurde benachrichtigt.`);
+  res.redirect('/admin/accounts');
+});
+
+app.post('/admin/accounts/:id/delete', requireRoot, (req, res) => {
+  const target = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
+  if (!target || target.id === req.user.id || target.role === 'hrhr') {
+    return renderError(res, 400, 'Nicht moeglich', 'Dieser Account kann nicht geloescht werden.');
+  }
+
+  const reason = String(req.body.reason || '').trim();
+  if (!reason) {
+    flash(req, 'error', 'Bitte gib eine Begruendung an.');
+    return res.redirect('/admin/accounts');
+  }
+
+  const raw = String(req.body.delete_at || '').trim();
+  const when = raw ? new Date(raw) : new Date();
+  if (Number.isNaN(when.getTime())) {
+    flash(req, 'error', 'Ungültiges Lösch-Datum.');
+    return res.redirect('/admin/accounts');
+  }
+  const deleteAt = when.toISOString();
+  const now = new Date();
+
+  if (when <= now) {
+    // Sofort loeschen
+    db.prepare(`
+      UPDATE users SET status = 'deleted', disabled_reason = ?, disabled_at = datetime('now'),
+          disabled_by = ?, disable_until = NULL, delete_at = NULL, updated_at = datetime('now')
+      WHERE id = ?
+    `).run(reason, req.user.id, target.id);
+    if (target.email) mailer.sendAccountDeleted(target.email, reason);
+    logAccountAction(target.id, req.user.id, 'deleted', reason);
+    flash(req, 'success', `Konto von ${target.username} geloescht. E-Mail wurde benachrichtigt.`);
+  } else {
+    // Geplante Loeschung: erst zum angegebenen Zeitpunkt
+    db.prepare(`
+      UPDATE users SET delete_at = ?, disabled_reason = ?, updated_at = datetime('now')
+      WHERE id = ?
+    `).run(deleteAt, reason, target.id);
+    logAccountAction(target.id, req.user.id, 'delete_scheduled',
+      `${reason} (geplante Löschung: ${new Date(deleteAt).toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short' })})`);
+    flash(req, 'success', `Löschung von ${target.username} für ${new Date(deleteAt).toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short' })} geplant.`);
+  }
   res.redirect('/admin/accounts');
 });
 
@@ -1242,31 +1398,6 @@ app.post('/admin/accounts/:id/enable', requireRoot, async (req, res) => {
   logAccountAction(target.id, req.user.id, 'enabled', reason || 'Reaktiviert');
 
   flash(req, 'success', `Konto von ${target.username} reaktiviert. E-Mail wurde benachrichtigt.`);
-  res.redirect('/admin/accounts');
-});
-
-app.post('/admin/accounts/:id/delete', requireRoot, (req, res) => {
-  const target = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
-  if (!target || target.id === req.user.id || target.role === 'hrhr') {
-    return renderError(res, 400, 'Nicht moeglich', 'Dieser Account kann nicht geloescht werden.');
-  }
-
-  const reason = String(req.body.reason || '').trim();
-  if (!reason) {
-    flash(req, 'error', 'Bitte gib eine Begruendung an.');
-    return res.redirect('/admin/accounts');
-  }
-
-  db.prepare(`
-    UPDATE users SET status = 'deleted', disabled_reason = ?, disabled_at = datetime('now'),
-        disabled_by = ?, updated_at = datetime('now')
-    WHERE id = ?
-  `).run(reason, req.user.id, target.id);
-
-  if (target.email) mailer.sendAccountDeleted(target.email, reason);
-  logAccountAction(target.id, req.user.id, 'deleted', reason);
-
-  flash(req, 'success', `Konto von ${target.username} geloescht. E-Mail wurde benachrichtigt.`);
   res.redirect('/admin/accounts');
 });
 
@@ -1305,6 +1436,87 @@ app.post('/admin/accounts/:id/role', requireRoot, async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// Account-Verlauf & Notizen (ab Team erreichbar)
+// ---------------------------------------------------------------------------
+app.get('/admin/accounts/:id', requireHR, (req, res) => {
+  const target = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
+  if (!target) return renderError(res, 404, 'Nicht gefunden', 'Dieser Account existiert nicht.');
+
+  const logs = db.prepare(`
+    SELECT l.*, ar.username AS actor_name, ar.global_name AS actor_global
+    FROM account_logs l
+    LEFT JOIN users ar ON ar.id = l.actor_id
+    WHERE l.account_id = ?
+    ORDER BY l.id DESC LIMIT 200
+  `).all(target.id);
+
+  const notes = db.prepare(`
+    SELECT n.*, u.username, u.global_name
+    FROM account_notes n
+    LEFT JOIN users u ON u.id = n.author_id
+    WHERE n.account_id = ?
+    ORDER BY n.id DESC
+  `).all(target.id);
+
+  res.render('admin-account', {
+    title: `Verlauf: ${target.global_name || target.username}`,
+    target,
+    logs,
+    notes,
+    canManage: isRoot(req.user),
+  });
+});
+
+app.post('/admin/accounts/:id/note', requireHR, (req, res) => {
+  const target = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
+  if (!target) {
+    flash(req, 'error', 'Dieser Account existiert nicht.');
+    return res.redirect('/admin/accounts');
+  }
+  const note = String(req.body.note || '').trim();
+  if (!note) {
+    flash(req, 'error', 'Bitte gib eine Notiz ein.');
+    return res.redirect(`/admin/accounts/${target.id}`);
+  }
+  addAccountNote(target.id, req.user.id, note);
+  logAccountAction(target.id, req.user.id, 'note_added', 'Notiz hinzugefügt');
+  flash(req, 'success', 'Notiz gespeichert.');
+  res.redirect(`/admin/accounts/${target.id}`);
+});
+
+// ---------------------------------------------------------------------------
+// Geplante Reaktivierungen/Löschungen abarbeiten (alle 60 s)
+// ---------------------------------------------------------------------------
+function runAccountScheduler() {
+  const now = new Date().toISOString();
+  const toEnable = db.prepare(`
+    SELECT * FROM users WHERE status = 'disabled' AND disable_until IS NOT NULL AND disable_until <= ?
+  `).all(now);
+  for (const u of toEnable) {
+    db.prepare(`
+      UPDATE users SET status = 'active', disable_until = NULL, disabled_reason = NULL,
+          disabled_at = NULL, disabled_by = NULL, updated_at = ?
+      WHERE id = ?
+    `).run(now, u.id);
+    logAccountAction(u.id, null, 'enabled_auto', 'Automatische Reaktivierung nach festgelegter Zeit');
+    if (u.email) mailer.sendAccountReactivated(u.email, 'Automatische Reaktivierung nach festgelegter Zeit');
+  }
+  const toDelete = db.prepare(`
+    SELECT * FROM users WHERE delete_at IS NOT NULL AND delete_at <= ?
+  `).all(now);
+  for (const u of toDelete) {
+    db.prepare(`
+      UPDATE users SET status = 'deleted', delete_at = NULL,
+          disabled_reason = COALESCE(disabled_reason, 'Geplante Löschung'), disabled_at = ?,
+          disabled_by = NULL, updated_at = ?
+      WHERE id = ?
+    `).run(now, now, u.id);
+    logAccountAction(u.id, null, 'deleted_auto', 'Automatische Löschung nach festgelegter Zeit');
+    if (u.email) mailer.sendAccountDeleted(u.email, 'Ihr Konto wurde nach festgelegter Zeit gelöscht.');
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Fehlerbehandlung
 // ---------------------------------------------------------------------------
 // Health-Check fuer Render (Keep-Awake-Cron fragt diese Route regelmaessig ab)
@@ -1340,6 +1552,8 @@ function markAllOverdue() {
 if (require.main === module) {
   markAllOverdue();
   runBackup();
+  // Account-Scheduler: automatische Freigaben/Löschungen alle 60 Sekunden
+  setInterval(runAccountScheduler, 60 * 1000);
   // Taegliches Backup + taegliche Überfaelligkeits-Markierung
   setInterval(() => {
     markAllOverdue();
@@ -1360,4 +1574,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app, sessionStore, session }; // für Tests
+module.exports = { app, sessionStore, session, runAccountScheduler }; // für Tests

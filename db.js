@@ -61,6 +61,8 @@ db.exec(`
     disabled_reason   TEXT,
     disabled_at       TEXT,
     disabled_by       INTEGER,
+    disable_until     TEXT,
+    delete_at         TEXT,
     created_at        TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at        TEXT NOT NULL DEFAULT (datetime('now')),
     last_login        TEXT
@@ -107,6 +109,24 @@ db.exec(`
     action      TEXT NOT NULL,
     reason      TEXT,
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS account_notes (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id  INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    author_id   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    note        TEXT NOT NULL,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS push_subscriptions (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    endpoint     TEXT NOT NULL,
+    keys_auth    TEXT NOT NULL,
+    keys_p256dh  TEXT NOT NULL,
+    created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (user_id, endpoint)
   );
 
   CREATE TABLE IF NOT EXISTS ticket_logs (
@@ -189,6 +209,8 @@ function migrateUsers() {
   add('reset_token', 'TEXT');
   add('reset_expires', 'TEXT');
   add('notify_changes', 'INTEGER NOT NULL DEFAULT 0');
+  add('disable_until', 'TEXT');
+  add('delete_at', 'TEXT');
   // Altes is_staff-Flag auf neue Rollen abbilden
   if (cols.includes('is_staff') && !cols.includes('role')) {
     db.exec("UPDATE users SET role = 'hr' WHERE is_staff = 1");
@@ -203,6 +225,26 @@ function migrateUsers() {
       action      TEXT NOT NULL,
       reason      TEXT,
       created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS account_notes (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      account_id  INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      author_id   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      note        TEXT NOT NULL,
+      created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+  `);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS push_subscriptions (
+      id           INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      endpoint     TEXT NOT NULL,
+      keys_auth    TEXT NOT NULL,
+      keys_p256dh  TEXT NOT NULL,
+      created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE (user_id, endpoint)
     );
   `);
 }
@@ -252,6 +294,13 @@ function logTicketAction(ticketId, actorId, action, details = null) {
   `).run(ticketId, actorId, action, details);
 }
 
+function addAccountNote(accountId, authorId, note) {
+  db.prepare(`
+    INSERT INTO account_notes (account_id, author_id, note)
+    VALUES (?, ?, ?)
+  `).run(accountId, authorId, note);
+}
+
 module.exports = {
   db,
   isRemote,
@@ -262,4 +311,5 @@ module.exports = {
   insertSystemMessage,
   logAccountAction,
   logTicketAction,
+  addAccountNote,
 };

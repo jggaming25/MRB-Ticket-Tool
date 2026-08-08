@@ -36,6 +36,37 @@
     </div>
   </div>
 
+  <div class="card">
+    <form method="get" action="/dashboard" class="filter-form">
+      <div class="form-group">
+        <label for="status">Status</label>
+        <select name="status" id="status">
+          <option value="all" <%= status === 'all' ? 'selected' : '' %>>Alle</option>
+          <option value="open" <%= status === 'open' ? 'selected' : '' %>>Offen</option>
+          <option value="pending" <%= status === 'pending' ? 'selected' : '' %>>In Bearbeitung</option>
+          <option value="release" <%= status === 'release' ? 'selected' : '' %>>Freigabe zur Schließung</option>
+          <option value="closed" <%= status === 'closed' ? 'selected' : '' %>>Geschlossen</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="sort">Sortieren nach</label>
+        <select name="sort" id="sort">
+          <option value="updated" <%= sort === 'updated' ? 'selected' : '' %>>Letzte Aktivität</option>
+          <option value="created" <%= sort === 'created' ? 'selected' : '' %>>Erstellt am</option>
+          <option value="status" <%= sort === 'status' ? 'selected' : '' %>>Status</option>
+        </select>
+      </div>
+      <div class="form-group grow">
+        <label for="search">Suche</label>
+        <input type="text" name="search" id="search" placeholder="Betreff oder Ticketnummer ..." value="<%= search || '' %>">
+      </div>
+      <div class="form-group filter-actions">
+        <button type="submit" class="btn btn-primary">Anwenden</button>
+        <a class="btn btn-ghost" href="/dashboard">Zurücksetzen</a>
+      </div>
+    </form>
+  </div>
+
   <% if (myTickets.length === 0) { %>
     <div class="empty-state">
       <div class="empty-icon">🎫</div>

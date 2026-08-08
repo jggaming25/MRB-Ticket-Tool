@@ -6,7 +6,7 @@
       <p class="muted">Vollständiges Protokoll aller Konto- und Ticket-Aktionen. Nur für festgelegte Inhaber.</p>
     </div>
     <div class="btn-group">
-      <a class="btn btn-ghost" href="/admin/accounts">Team-Verwaltung</a>
+      <a class="btn btn-ghost" href="/admin/accounts">Nutzerverwaltung</a>
       <a class="btn btn-ghost" href="/admin">Alle Tickets</a>
     </div>
   </div>
@@ -14,12 +14,34 @@
   <div class="card">
     <form method="get" action="/admin/logs" class="filter-form">
       <div class="form-group">
-        <label for="filter">Filter</label>
+        <label for="filter">Bereich</label>
         <select name="filter" id="filter">
           <option value="all" <%= filter === 'all' ? 'selected' : '' %>>Alle</option>
           <option value="account" <%= filter === 'account' ? 'selected' : '' %>>Nur Konto-Aktionen</option>
           <option value="ticket" <%= filter === 'ticket' ? 'selected' : '' %>>Nur Ticket-Aktionen</option>
         </select>
+      </div>
+      <div class="form-group">
+        <label for="action">Aktion</label>
+        <select name="action" id="action">
+          <option value="all" <%= action === 'all' ? 'selected' : '' %>>Alle Aktionen</option>
+          <% actions.forEach((a) => { %>
+            <option value="<%= a %>" <%= action === a ? 'selected' : '' %>><%= a %></option>
+          <% }) %>
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="days">Zeitraum</label>
+        <select name="days" id="days">
+          <option value="0" <%= String(days) === '0' ? 'selected' : '' %>>Gesamt</option>
+          <option value="1" <%= String(days) === '1' ? 'selected' : '' %>>Letzte 24 Std.</option>
+          <option value="7" <%= String(days) === '7' ? 'selected' : '' %>>Letzte 7 Tage</option>
+          <option value="30" <%= String(days) === '30' ? 'selected' : '' %>>Letzte 30 Tage</option>
+        </select>
+      </div>
+      <div class="form-group grow">
+        <label for="user">Nutzer</label>
+        <input type="text" name="user" id="user" placeholder="Name / Discord-Username" value="<%= user %>">
       </div>
       <div class="form-group filter-actions">
         <button type="submit" class="btn btn-primary">Filtern</button>

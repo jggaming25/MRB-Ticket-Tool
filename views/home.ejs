@@ -10,6 +10,7 @@
         <a class="btn btn-ghost" href="/tickets/new">Neues Ticket</a>
       <% } else { %>
         <a class="btn btn-primary" href="/login">Jetzt einloggen (Discord)</a>
+        <p class="hint">Nach dem Login siehst du hier alle internen Bereiche und Links.</p>
       <% } %>
     </div>
   </div>
@@ -38,5 +39,72 @@
       </div>
     <% }) %>
   </div>
+
+  <% if (config.tools && config.tools.length) { %>
+    <h2 class="section-heading">Unsere Tools</h2>
+    <div class="tool-grid">
+      <% config.tools.forEach((t) => { %>
+        <a class="tool-card card" href="<%= t.url %>" target="_blank" rel="noopener noreferrer">
+          <% if (t.image) { %>
+            <img class="tool-image" src="<%= t.image %>" alt="<%= t.label %>" data-fallback="<%= t.emoji ? '' : '' %>">
+          <% } else { %>
+            <div class="tool-emoji"><%= t.emoji || '🔗' %></div>
+          <% } %>
+          <h3><%= t.label %></h3>
+          <p class="muted"><%= t.description %></p>
+          <span class="btn btn-ghost btn-sm">Öffnen ↗</span>
+        </a>
+      <% }) %>
+    </div>
+  <% } %>
+
+  <% if (user) { %>
+    <h2 class="section-heading">Interne Bereiche</h2>
+    <div class="tool-grid">
+      <a class="tool-card card" href="/dashboard">
+        <div class="tool-emoji">🎫</div>
+        <h3>Meine Tickets</h3>
+        <p class="muted">Deine Anfragen ansehen, verfolgen und neue erstellen.</p>
+      </a>
+      <a class="tool-card card" href="/tickets/new">
+        <div class="tool-emoji">➕</div>
+        <h3>Neues Ticket</h3>
+        <p class="muted">Ein neues Support-Ticket erstellen.</p>
+      </a>
+      <a class="tool-card card" href="/account/settings">
+        <div class="tool-emoji">⚙️</div>
+        <h3>Einstellungen</h3>
+        <p class="muted">Benachrichtigungen und Kontodaten.</p>
+      </a>
+      <% if (isHR) { %>
+        <a class="tool-card card" href="/admin">
+          <div class="tool-emoji">🗂️</div>
+          <h3>Alle Tickets</h3>
+          <p class="muted">Alle Tickets im System verwalten.</p>
+        </a>
+      <% } %>
+      <% if (isRoot) { %>
+        <a class="tool-card card" href="/admin/accounts">
+          <div class="tool-emoji">👥</div>
+          <h3>Nutzerverwaltung</h3>
+          <p class="muted">Rollen, Sperren und Account-Verläufe.</p>
+        </a>
+        <a class="tool-card card" href="/admin/logs">
+          <div class="tool-emoji">📜</div>
+          <h3>Audit-Log</h3>
+          <p class="muted">Alle Konto- und Ticket-Aktionen.</p>
+        </a>
+      <% } %>
+      <% if (config.staffLinks && config.staffLinks.length) { %>
+        <% config.staffLinks.forEach((l) => { %>
+          <a class="tool-card card" href="<%= l.url %>" target="_blank" rel="noopener noreferrer">
+            <div class="tool-emoji">🔗</div>
+            <h3><%= l.label %></h3>
+            <p class="muted">Externes Tool öffnen.</p>
+          </a>
+        <% }) %>
+      <% } %>
+    </div>
+  <% } %>
 
 <%- include('partials/footer') %>

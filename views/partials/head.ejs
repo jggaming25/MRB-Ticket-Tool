@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="/static/css/style.css?v=<%= assetVersion %>">
   <link rel="icon" href="/static/logo.png">
 </head>
-<body data-user-id="<%= user ? user.id : '' %>" data-notify-enabled="<%= user && user.notify_changes === 1 ? '1' : '0' %>">
+<body data-user-id="<%= user ? user.id : '' %>" data-notify-enabled="<%= user && user.notify_changes === 1 ? '1' : '0' %>" data-push-key="<%= pushEnabled ? pushPublicKey : '' %>">
   <header class="topbar">
     <div class="container topbar-inner">
       <a class="brand" href="/">
@@ -37,7 +37,7 @@
             <% } %>
           <% } %>
           <% if (isRoot) { %>
-            <a class="nav-link <%= currentPath.startsWith('/admin/accounts') ? 'active' : '' %>" href="/admin/accounts">Team-Verwaltung</a>
+            <a class="nav-link <%= currentPath.startsWith('/admin/accounts') ? 'active' : '' %>" href="/admin/accounts">Nutzerverwaltung</a>
             <a class="nav-link <%= currentPath === '/admin/logs' ? 'active' : '' %>" href="/admin/logs">Audit-Log</a>
           <% } %>
         </nav>

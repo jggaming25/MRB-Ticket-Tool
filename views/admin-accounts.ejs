@@ -2,8 +2,8 @@
 
   <div class="page-head">
     <div>
-      <h1>Team-Verwaltung</h1>
-      <p class="muted">Hier vergibst du Rollen für alle Konten, die sich bereits angemeldet haben. Nur Inhaber können Team-Accounts ändern oder löschen.</p>
+      <h1>Nutzerverwaltung</h1>
+      <p class="muted">Hier siehst du jeden Account, der sich je angemeldet hat. Du kannst Rollen vergeben, Konten sperren und den Verlauf einsehen. Nur Inhaber können Team-Accounts ändern oder löschen.</p>
     </div>
     <div class="btn-group">
       <a class="btn btn-ghost" href="/admin/logs">Audit-Log</a>
@@ -73,7 +73,7 @@
                 <div class="user-cell">
                   <img class="avatar" src="<%= u.avatar ? 'https://cdn.discordapp.com/avatars/' + u.discord_id + '/' + u.avatar + '.png?size=64' : '/static/img/placeholder.svg' %>" data-fallback="/static/img/placeholder.svg">
                   <div>
-                    <strong><%= u.global_name || u.username %></strong>
+                    <strong><a href="/admin/accounts/<%= u.id %>"><%= u.global_name || u.username %></a></strong>
                     <% if (u.id === myId) { %><span class="badge">Du</span><% } %>
                     <div class="muted small">@<%= u.discord_username || '–' %></div>
                   </div>
@@ -81,7 +81,15 @@
               </td>
               <td class="small"><%= u.email || '–' %></td>
               <td><span class="tag <%= u.role === 'hrhr' ? 'role-hrhr' : (u.role === 'hr' ? 'role-hr' : 'role-user') %>"><%= roleLabels[u.role] || u.role %></span></td>
-              <td><span class="tag acc-<%= u.status %>"><%= accountStatusLabel(u.status) %></span></td>
+              <td>
+                <span class="tag acc-<%= u.status %>"><%= accountStatusLabel(u.status) %></span>
+                <% if (u.disable_until) { %>
+                  <div class="muted small">Auto-Freigabe: <%= fmtDate(u.disable_until) %></div>
+                <% } %>
+                <% if (u.delete_at) { %>
+                  <div class="muted small">Löschung geplant: <%= fmtDate(u.delete_at) %></div>
+                <% } %>
+              </td>
               <td><%= u.ticket_count %></td>
               <td class="muted small"><%= fmtDate(u.created_at) %></td>
               <td class="muted small"><%= fmtDate(u.last_login) %></td>
@@ -110,6 +118,12 @@
                         <form method="post" action="/admin/accounts/<%= u.id %>/disable">
                           <label class="small">Begründung *</label>
                           <input type="text" name="reason" required placeholder="Warum deaktivieren?">
+                          <label class="small">Freigabe nach</label>
+                          <select name="duration" class="input" id="dur-<%= u.id %>">
+                            <option value="inf">Unbegrenzt (nur manuell)</option>
+                            <option value="custom">Automatisch am ...</option>
+                          </select>
+                          <input type="datetime-local" name="disable_until" class="input" id="until-<%= u.id %>" disabled>
                           <button type="submit" class="btn btn-sm btn-danger">Deaktivieren</button>
                         </form>
                       <% } %>
@@ -118,9 +132,13 @@
                               data-confirm="Konto wirklich löschen? Diese Aktion wird dem Nutzer per E-Mail mitgeteilt.">
                           <label class="small">Begründung *</label>
                           <input type="text" name="reason" required placeholder="Warum löschen?">
-                          <button type="submit" class="btn btn-sm btn-danger">Löschen</button>
+                          <label class="small">Löschen am *</label>
+                          <input type="datetime-local" name="delete_at" class="input" required>
+                          <p class="hint">Datum in der Vergangenheit oder jetzt = sofort löschen.</p>
+                          <button type="submit" class="btn btn-sm btn-danger">Löschen planen</button>
                         </form>
                       <% } %>
+                      <a class="btn btn-sm btn-ghost" href="/admin/accounts/<%= u.id %>">Verlauf & Notizen</a>
                     </div>
                   </details>
                 <% } else if (u.id === myId) { %>

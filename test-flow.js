@@ -129,6 +129,16 @@ async function postForm(url, formData, cookie) {
   return { status: res.status, location: res.headers.get('location'), body: await res.text(), headers: res.headers };
 }
 
+async function postJson(url, body, cookie) {
+  const res = await fetch(base + url, {
+    method: 'POST',
+    headers: { cookie: cookie || '', 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    redirect: 'manual',
+  });
+  return { status: res.status, location: res.headers.get('location'), body: await res.text(), headers: res.headers };
+}
+
 // Discord-Login als bestimmter Nutzer simulieren -> Session-Cookie
 async function discordLogin(username, globalName, email) {
   mockDiscord = {
@@ -190,7 +200,7 @@ function findMail(subjectPart) {
   ok('Inhaber: E-Mail kommt aus Discord', hrhrUser.email === 'jlg09@example.com', hrhrUser.email);
 
   r = await get('/admin/accounts', hrhrCookie);
-  ok('Inhaber: Team-Verwaltung erreichbar', r.status === 200 && r.body.includes('Team-Verwaltung'));
+  ok('Inhaber: Nutzerverwaltung erreichbar', r.status === 200 && r.body.includes('Nutzerverwaltung'));
 
   // Passwort-Login existiert nicht mehr -> Route weg (404)
   r = await post('/auth/login', { identifier: 'jlg09@example.com', password: 'x' });
@@ -479,6 +489,16 @@ function findMail(subjectPart) {
 
   r = await get('/api/tickets/updates?since=kaputt', userCookie);
   ok('Benachrichtigungs-API: ungueltiges since -> 400', r.status === 400);
+
+  // Web-Push-Subscription-API
+  r = await postJson('/api/push/subscribe', {
+    subscription: { endpoint: 'https://push.example/x', keys: { auth: 'YQ==', p256dh: 'YWJj' } },
+  }, userCookie);
+  ok('Push: Subscription gespeichert', r.status === 200 && r.body.includes('ok'));
+  r = await postJson('/api/push/subscribe', { subscription: {} }, userCookie);
+  ok('Push: ungueltige Subscription -> 400', r.status === 400);
+  r = await postJson('/api/push/unsubscribe', { endpoint: 'https://push.example/x' }, userCookie);
+  ok('Push: Unsubscribe ok', r.status === 200 && r.body.includes('ok'));
 
   // Ohne Login: Einstellungen nicht erreichbar
   r = await get('/account/settings');

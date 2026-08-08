@@ -1,0 +1,65 @@
+<%- include('partials/head', { title, user, isHR, isHRHR, currentPath }) %>
+
+  <div class="page-head">
+    <div>
+      <a class="btn btn-ghost btn-sm" href="/admin/accounts">← Nutzerverwaltung</a>
+      <h1 class="mt-sm">
+        Verlauf: <%= target.global_name || target.username %>
+        <span class="tag <%= target.role === 'hrhr' ? 'role-hrhr' : (target.role === 'hr' ? 'role-hr' : 'role-user') %>"><%= roleLabels[target.role] || target.role %></span>
+        <span class="tag acc-<%= target.status %>"><%= accountStatusLabel(target.status) %></span>
+      </h1>
+      <p class="muted">@<%= target.discord_username || '–' %> · <%= target.email || 'keine E-Mail' %> · Registriert <%= fmtDate(target.created_at) %></p>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Notizen</h2>
+    <form method="post" action="/admin/accounts/<%= target.id %>/note" class="form-row">
+      <div class="form-group grow">
+        <input type="text" name="note" class="input" placeholder="Neue Notiz zu diesem Account eingeben ..." required>
+      </div>
+      <div class="form-group">
+        <button type="submit" class="btn btn-primary">Notiz speichern</button>
+      </div>
+    </form>
+    <% if (notes.length === 0) { %>
+      <p class="muted">Noch keine Notizen.</p>
+    <% } else { %>
+      <div class="notes-list">
+        <% notes.forEach((n) => { %>
+          <div class="note">
+            <div class="note-head">
+              <strong><%= n.global_name || n.username || 'System' %></strong>
+              <span class="muted small"><%= fmtDate(n.created_at) %></span>
+            </div>
+            <div class="note-text"><%= n.note %></div>
+          </div>
+        <% }) %>
+      </div>
+    <% } %>
+  </div>
+
+  <div class="card">
+    <h2>Verlauf (Audit-Log)</h2>
+    <% if (logs.length === 0) { %>
+      <p class="muted">Noch keine Aktionen protokolliert.</p>
+    <% } else { %>
+      <table class="table">
+        <thead>
+          <tr><th>Zeit</th><th>Aktion</th><th>Durch</th><th>Details</th></tr>
+        </thead>
+        <tbody>
+          <% logs.forEach((l) => { %>
+            <tr>
+              <td class="muted small"><%= fmtDate(l.created_at) %></td>
+              <td><span class="tag log-<%= l.action %>"><%= l.action %></span></td>
+              <td><%= l.actor_global || l.actor_name || 'System' %></td>
+              <td class="small"><%= l.reason || '–' %></td>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    <% } %>
+  </div>
+
+<%- include('partials/footer') %>

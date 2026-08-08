@@ -9,7 +9,16 @@
 
   <div class="card">
     <h2>Benachrichtigungen</h2>
-    <p class="muted">Lass dich benachrichtigen, wenn sich an deinen Tickets etwas ändert (z. B. neue Nachrichten oder Statusänderungen). Die Hinweise erscheinen als Desktop-Benachrichtigung, solange diese Website im Browser geöffnet ist.</p>
+    <p class="muted">
+      Lass dich benachrichtigen, wenn sich an deinen Tickets etwas ändert (z. B. neue Nachrichten oder Statusänderungen).
+      <% if (pushEnabled) { %>
+        Die Hinweise erscheinen als Browser-Benachrichtigung – auch dann, wenn diese Website geschlossen ist
+        (der Browser muss lediglich geöffnet sein bzw. im Hintergrund laufen).
+      <% } else { %>
+        Die Hinweise erscheinen als Browser-Benachrichtigung, solange diese Website im Browser geöffnet ist.
+        Push-Benachrichtigungen (auch bei geschlossener Website) sind auf diesem Server noch nicht eingerichtet.
+      <% } %>
+    </p>
 
     <form method="post" action="/account/settings" class="notify-form">
       <label class="checkbox-row">
@@ -23,7 +32,7 @@
     </form>
 
     <p class="hint" style="margin-top:16px;">
-      Desktop-Benachrichtigungen müssen zusätzlich vom Browser erlaubt werden:
+      Browser-Benachrichtigungen müssen zusätzlich vom Browser erlaubt werden:
       <button type="button" class="btn btn-sm btn-secondary" id="enable-notifications">Benachrichtigungen im Browser aktivieren</button>
       <span id="notify-permission" class="hint"></span>
     </p>

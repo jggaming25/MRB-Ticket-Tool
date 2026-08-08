@@ -54,13 +54,34 @@ module.exports = {
 
   // ---------------------------------------------------------------------------
   // Interne Links – nur für HR und HR-HR sichtbar (erscheinen als "Interne
-  // Links" in der Navigation, sobald man eingeloggt ist). Beliebig viele
-  // Eintraege: einfach { label, url } ergaenzen.
+  // Links" in der Navigation und auf der Mainpage, sobald man eingeloggt ist).
   // ---------------------------------------------------------------------------
   staffLinks: [
-    { label: 'Team-Dokumentation', url: 'https://example.com/wiki' },
-    { label: 'Fahrplan-Daten', url: 'https://example.com/fahrplan' },
-    { label: 'Roblox-Projektseite', url: 'https://example.com/projekt' },
+    { label: 'Anwesenheitstool', url: 'https://anwesenheit-new.web.app/' },
+    { label: 'OnlineBefehl & Fahrplan', url: 'https://jggaming25.github.io/MRB-OnlineBefehl/index.html#/login' },
+  ],
+
+  // ---------------------------------------------------------------------------
+  // Externe Tools – Kacheln auf der Startseite ("Unsere Tools"). Jedes Tool
+  // bekommt eine Karte mit Link. Optional ein Vorschaubild: lege die Datei
+  // unter public/images/ ab (z. B. public/images/anwesenheit.png) und trage
+  // hier den Pfad "/static/images/anwesenheit.png" bei "image" ein.
+  // ---------------------------------------------------------------------------
+  tools: [
+    {
+      label: 'Anwesenheitstool',
+      description: 'Zeiterfassung und Anwesenheit der Mitarbeiter.',
+      url: 'https://anwesenheit-new.web.app/',
+      image: '', // Bild-Pfad, z. B. '/static/images/anwesenheit.png'
+      emoji: '🕒',
+    },
+    {
+      label: 'OnlineBefehl & Fahrplan',
+      description: 'Fahrplan- und Online-Befehls-Übersicht für den Betrieb.',
+      url: 'https://jggaming25.github.io/MRB-OnlineBefehl/index.html#/login',
+      image: '', // Bild-Pfad, z. B. '/static/images/onlinebefehl.png'
+      emoji: '🚆',
+    },
   ],
 
   // ---------------------------------------------------------------------------

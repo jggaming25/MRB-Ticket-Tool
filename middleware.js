@@ -86,7 +86,7 @@ function requireHRHR(req, res, next) {
   if (!isHRHR(req.user)) {
     return res.status(403).render('error', {
       title: 'Kein Zugriff',
-      message: 'Nur Inhaber duerfen die Team-Verwaltung nutzen.',
+      message: 'Nur Inhaber duerfen die Nutzerverwaltung nutzen.',
       code: 403,
     });
   }
