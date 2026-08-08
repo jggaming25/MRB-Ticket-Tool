@@ -303,9 +303,13 @@ const LOG_ACTION_LABELS = {
 
 // Beschriftung fuer die UI: bekannte Aktionen -> deutsches Label,
 // sonst lesbarer Ersatz statt eines rohen Keys bzw. "unbekannt".
+// Die Action-Spalte kann je nach DB-Schema "action" oder "ACTION" heissen
+// (Turso legt sie historisch grossgeschrieben an) – daher case-insensitiv.
 function logActionLabel(action, detail) {
-  if (action && LOG_ACTION_LABELS[action]) return LOG_ACTION_LABELS[action];
-  if (action && String(action).toLowerCase().trim() !== 'unbekannt') return action;
+  const key = action == null ? '' : String(action);
+  if (LOG_ACTION_LABELS[key]) return LOG_ACTION_LABELS[key];
+  if (LOG_ACTION_LABELS[key.toLowerCase()]) return LOG_ACTION_LABELS[key.toLowerCase()];
+  if (key && key.toLowerCase() !== 'unbekannt') return key;
   return 'Unbekannt';
 }
 

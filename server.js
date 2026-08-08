@@ -348,6 +348,17 @@ function ticketViewUrl(ticket, adminCtx) {
   return `/tickets/${ticket.id}` + (adminCtx ? '?ctx=admin' : '');
 }
 
+// Turso liefert die Action-Spalte der Log-Tabellen historisch als "ACTION"
+// (grossgeschrieben, stammt aus einem alten Schema). SQL ist case-insensitiv,
+// aber JS-Zugriffe auf l.action würden sonst undefined liefern. Die Zeilen
+// werden normalisiert, damit überall l.action verfügbar ist.
+function normalizeLogRows(rows) {
+  return (rows || []).map((r) => {
+    if (r && r.ACTION !== undefined && r.action === undefined) r.action = r.ACTION;
+    return r;
+  });
+}
+
 // ---- Homepage-Bilder -------------------------------------------------------
 function getHomeImages() {
   const dir = config.home.imageDir;
@@ -971,13 +982,13 @@ app.get('/tickets/:id', requireLogin, loadTicketFor, (req, res) => {
   markOverdue(ticket);
 
   // Vollstaendiges Audit-Log des Tickets
-  const logs = db.prepare(`
+  const logs = normalizeLogRows(db.prepare(`
     SELECT l.*, a.username AS actor_name, a.global_name AS actor_global
     FROM ticket_logs l
     LEFT JOIN users a ON a.id = l.actor_id
     WHERE l.ticket_id = ?
     ORDER BY l.id ASC
-  `).all(ticket.id);
+  `).all(ticket.id));
 
   const isClosed = ticket.status === 'closed';
 
@@ -1533,13 +1544,13 @@ app.get('/admin/accounts', requireRoot, (req, res) => {
       u.username ASC
   `).all(...params);
 
-  const logs = db.prepare(`
+  const logs = normalizeLogRows(db.prepare(`
     SELECT l.*, a.username AS account_name, ar.username AS actor_name
     FROM account_logs l
     LEFT JOIN users a ON a.id = l.account_id
     LEFT JOIN users ar ON ar.id = l.actor_id
     ORDER BY l.id DESC LIMIT 50
-  `).all();
+  `).all());
 
   const stats = {
     hr: db.prepare("SELECT COUNT(*) AS c FROM users WHERE role = 'hr' AND status != 'deleted'").get().c,
@@ -1580,7 +1591,7 @@ app.get('/admin/logs', requireRoot, (req, res) => {
       p.push(userLike, userLike, userLike, userLike);
     }
     if (since) p.push(since);
-    accountLogs = db.prepare(`
+    accountLogs = normalizeLogRows(db.prepare(`
       SELECT l.*, a.username AS account_name, a.global_name AS account_global,
              ar.username AS actor_name, ar.global_name AS actor_global
       FROM account_logs l
@@ -1588,7 +1599,7 @@ app.get('/admin/logs', requireRoot, (req, res) => {
       LEFT JOIN users ar ON ar.id = l.actor_id
       WHERE ${where.length ? where.join(' AND ') : '1=1'}${sinceSql}
       ORDER BY l.id DESC LIMIT 300
-    `).all(...p);
+    `).all(...p));
   }
 
   if (filter !== 'account') {
@@ -1600,20 +1611,20 @@ app.get('/admin/logs', requireRoot, (req, res) => {
       p.push(userLike, userLike);
     }
     if (since) p.push(since);
-    ticketLogs = db.prepare(`
+    ticketLogs = normalizeLogRows(db.prepare(`
       SELECT l.*, t.number AS ticket_number, ar.username AS actor_name, ar.global_name AS actor_global
       FROM ticket_logs l
       LEFT JOIN tickets t ON t.id = l.ticket_id
       LEFT JOIN users ar ON ar.id = l.actor_id
       WHERE ${where.length ? where.join(' AND ') : '1=1'}${sinceSql}
       ORDER BY l.id DESC LIMIT 300
-    `).all(...p);
+    `).all(...p));
   }
 
   // Alle bisher bekannten Aktionen für das Dropdown (ohne Platzhalter,
   // mit deutscher Beschriftung)
   const actions = db.prepare('SELECT DISTINCT action FROM account_logs UNION SELECT DISTINCT action FROM ticket_logs ORDER BY action')
-    .all().map((r) => r.action).filter((a) => a && a.trim() && a !== 'unbekannt')
+    .all().map((r) => r.action || r.ACTION).filter((a) => a && a.trim() && a !== 'unbekannt')
     .map((a) => ({ value: a, label: logActionLabel(a) }));
 
   res.render('admin-logs', {
@@ -1782,13 +1793,13 @@ app.get('/admin/accounts/:id', requireHR, (req, res) => {
   const target = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
   if (!target) return renderError(res, 404, 'Nicht gefunden', 'Dieser Account existiert nicht.');
 
-  const logs = db.prepare(`
+  const logs = normalizeLogRows(db.prepare(`
     SELECT l.*, ar.username AS actor_name, ar.global_name AS actor_global
     FROM account_logs l
     LEFT JOIN users ar ON ar.id = l.actor_id
     WHERE l.account_id = ?
     ORDER BY l.id DESC LIMIT 200
-  `).all(target.id);
+  `).all(target.id));
 
   const notes = db.prepare(`
     SELECT n.*, u.username, u.global_name

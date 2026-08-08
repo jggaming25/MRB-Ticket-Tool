@@ -564,6 +564,21 @@ function findMail(subjectPart) {
   ok('LogLabel: Legacy-Aktion activated -> deutsches Label', logActionLabel('activated') === 'Konto aktiviert', logActionLabel('activated'));
   ok('LogLabel: Legacy-Aktion invited -> deutsches Label', logActionLabel('invited') === 'Eingeladen', logActionLabel('invited'));
   ok('LogLabel: Legacy-Aktion password_reset -> deutsches Label', logActionLabel('password_reset') === 'Passwort zurückgesetzt', logActionLabel('password_reset'));
+  ok('LogLabel: Grossbuchstaben-Key case-insensitiv', logActionLabel('ACTIVATED') === 'Konto aktiviert', logActionLabel('ACTIVATED'));
+
+  // Turso-Szenario: Die Action-Spalte heisst dort historisch "ACTION"
+  // (grossgeschrieben). SQL ist case-insensitiv, JS liest aber case-sensitiv
+  // -> ohne Normalisierung ergibt l.action undefined und die UI zeigt
+  // ueberall "Unbekannt". Die Normalisierung muss den Key angleichen.
+  db.prepare('DROP TABLE IF EXISTS upper_log').run();
+  db.prepare('CREATE TABLE upper_log (id INTEGER PRIMARY KEY AUTOINCREMENT, account_id INTEGER, actor_id INTEGER, ACTION TEXT, reason TEXT)').run();
+  db.prepare("INSERT INTO upper_log (account_id, actor_id, ACTION, reason) VALUES (?, ?, 'alarm_set', 'Upper-Case-Spalte')").run(normalUser.id, hrhrUser.id);
+  const rawRow = db.prepare('SELECT * FROM upper_log').get();
+  ok('Turso-Szenario: SELECT * liefert Key ACTION (gross)', rawRow && rawRow.ACTION === 'alarm_set' && rawRow.action === undefined, JSON.stringify(rawRow));
+  const normRow = { ...rawRow, action: rawRow.ACTION };
+  ok('Turso-Szenario: Normalisierung stellt action bereit', normRow.action === 'alarm_set');
+  ok('Turso-Szenario: Label korrekt nach Normalisierung', logActionLabel(normRow.action) === 'IT-Alarm gesetzt', logActionLabel(normRow.action));
+  db.prepare('DROP TABLE upper_log').run();
 
   // Legacy-Backfill: alte Detail-/Begruendungstexte werden korrekt rekonstruiert
   const legacyCases = [
