@@ -62,29 +62,6 @@ module.exports = {
   ],
 
   // ---------------------------------------------------------------------------
-  // Externe Tools – Kacheln auf der Startseite ("Unsere Tools"). Jedes Tool
-  // bekommt eine Karte mit Link. Optional ein Vorschaubild: lege die Datei
-  // unter public/images/ ab (z. B. public/images/anwesenheit.png) und trage
-  // hier den Pfad "/static/images/anwesenheit.png" bei "image" ein.
-  // ---------------------------------------------------------------------------
-  tools: [
-    {
-      label: 'Anwesenheitstool',
-      description: 'Zeiterfassung und Anwesenheit der Mitarbeiter.',
-      url: 'https://anwesenheit-new.web.app/',
-      image: '', // Bild-Pfad, z. B. '/static/images/anwesenheit.png'
-      emoji: '🕒',
-    },
-    {
-      label: 'OnlineBefehl & Fahrplan',
-      description: 'Fahrplan- und Online-Befehls-Übersicht für den Betrieb.',
-      url: 'https://jggaming25.github.io/MRB-OnlineBefehl/index.html#/login',
-      image: '', // Bild-Pfad, z. B. '/static/images/onlinebefehl.png'
-      emoji: '🚆',
-    },
-  ],
-
-  // ---------------------------------------------------------------------------
   // Tickets
   // ---------------------------------------------------------------------------
   // Kategorien, die der Ticket-Eroeffner beim Erstellen auswaehlen kann.
