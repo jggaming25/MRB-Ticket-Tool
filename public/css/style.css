@@ -38,6 +38,10 @@ body {
 
 .container { max-width: 1400px; margin: 0 auto; padding: 0 20px; width: 100%; }
 
+/* ---------- Links ---------- */
+a { color: #a5b4fc; }
+a:hover { color: #c7d2fe; }
+
 /* ---------- Topbar ---------- */
 .topbar {
   background: rgba(15, 17, 23, 0.85);
