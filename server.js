@@ -886,6 +886,12 @@ app.post('/tickets', requireLogin, ticketCreateLimiter, upload.single('attachmen
     }
   }
 
+  // Push-Benachrichtigung an alle HR/HR-HR (ohne den Ersteller), damit neue
+  // Tickets sofort sichtbar sind.
+  notifyAllStaffPush(`Neues Ticket #${String(number).padStart(4, '0')}`,
+    `Von ${req.user.global_name || req.user.username}: ${subjectTrim.slice(0, 100)}`,
+    `${BASE_URL}/tickets/${ticketId}`, req.user.id);
+
   res.redirect(`/tickets/${ticketId}`);
 });
 

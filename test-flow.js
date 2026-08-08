@@ -73,6 +73,7 @@ global.fetch = async (url, opts = {}) => {
 const { app, sessionStore } = require('./server');
 const { db } = require('./db');
 const config = require('./config');
+const pushModule = require('./push');
 
 let server;
 let base;
@@ -257,8 +258,16 @@ function findMail(subjectPart) {
   ticketForm.append('category', 'Bug');
   ticketForm.append('body', 'Seit heute Morgen geht gar nichts mehr. Die Datenbankabsturz-Fehlermeldung erscheint.');
   ticketForm.append('attachment', new Blob(['Testinhalt des Anhangs'], { type: 'text/plain' }), 'fehler-protokoll.txt');
+  // Ticket-Erstellung: HR/HR-HR mit notify_changes=1 erhalten Push
+  db.prepare('UPDATE users SET notify_changes = 1 WHERE id = ?').run(hrUser.id);
+  const pushedTo = [];
+  const origSend = pushModule.sendToUser;
+  pushModule.sendToUser = (userId, payload) => { pushedTo.push({ userId, payload }); };
   r = await postForm('/tickets', ticketForm, userCookie);
+  pushModule.sendToUser = origSend;
   ok('Ticket-Erstellung (Nutzer) mit Anhang leitet zum Ticket', r.status === 302 && /^\/tickets\/\d+$/.test(r.location), r.location);
+  const hrPushed = pushedTo.some((p) => p.userId === hrUser.id && /Neues Ticket #/.test(p.payload.title) && p.payload.url);
+  ok('Ticket-Erstellung: Team erhaelt Push-Benachrichtigung', hrPushed, JSON.stringify(pushedTo.map((p) => ({ uid: p.userId, title: p.payload.title }))));
   const ticketUrl = r.location;
   const ticketId = ticketUrl.split('/')[2];
 
@@ -315,10 +324,10 @@ function findMail(subjectPart) {
   const future = new Date(Date.now() + 48 * 3600 * 1000);
   const pad2 = (n) => String(n).padStart(2, '0');
   const futureLocal = `${future.getFullYear()}-${pad2(future.getMonth() + 1)}-${pad2(future.getDate())}T${pad2(future.getHours())}:${pad2(future.getMinutes())}`;
-  r = await post(`/admin/tickets/${ticketId}/due`, { due_at: futureLocal, next_action: 'Rückfrage an den Kunden' }, hrCookie);
+  r = await post(`/admin/tickets/${ticketId}/due`, { due_at: futureLocal, next_action: config.nextActions[0] }, hrCookie);
   ok('HR setzt Faelligkeit + naechste Aktion', r.status === 302);
   const dueTicket = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId);
-  ok('Faelligkeit: due_at gesetzt + naechste Aktion', !!dueTicket.due_at && dueTicket.next_action === 'Rückfrage an den Kunden', `due=${dueTicket.due_at} act=${dueTicket.next_action}`);
+  ok('Faelligkeit: due_at gesetzt + naechste Aktion', !!dueTicket.due_at && dueTicket.next_action === config.nextActions[0], `due=${dueTicket.due_at} act=${dueTicket.next_action}`);
 
   // Übergabe: HR uebergibt an HR-HR (mit Begründung)
   r = await post(`/admin/tickets/${ticketId}/transfer`, { assignee: String(hrhrUser.id), reason: 'Weil HR-HR das Problem kennt' }, hrCookie);
