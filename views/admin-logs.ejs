@@ -65,7 +65,7 @@
               <td class="muted small"><%= fmtDate(l.created_at) %></td>
               <td>
                 <% if (l.ticket_number) { %>
-                  <a class="mono" href="/tickets/<%= l.ticket_id %>">#<%= String(l.ticket_number).padStart(4, '0') %></a>
+                  <a class="mono" href="/tickets/<%= l.ticket_id %>?ctx=admin">#<%= String(l.ticket_number).padStart(4, '0') %></a>
                 <% } else { %>–<% } %>
               </td>
               <td><span class="tag log-<%= l.action || 'unbekannt' %>"><%= logActionLabel(l.action, l.details) %></span></td>

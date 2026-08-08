@@ -295,13 +295,17 @@ const LOG_ACTION_LABELS = {
   deleted_auto: 'Auto-Löschung',
   role_changed: 'Rolle geändert',
   note_added: 'Notiz hinzugefügt',
+  // Legacy-Keys (ältere Einträge, die vor der Umbenennung geschrieben wurden)
+  activated: 'Konto aktiviert',
+  invited: 'Eingeladen',
+  password_reset: 'Passwort zurückgesetzt',
 };
 
 // Beschriftung fuer die UI: bekannte Aktionen -> deutsches Label,
 // sonst lesbarer Ersatz statt eines rohen Keys bzw. "unbekannt".
 function logActionLabel(action, detail) {
   if (action && LOG_ACTION_LABELS[action]) return LOG_ACTION_LABELS[action];
-  if (action && action !== 'unbekannt') return action;
+  if (action && String(action).toLowerCase().trim() !== 'unbekannt') return action;
   return 'Unbekannt';
 }
 
@@ -310,7 +314,7 @@ function logActionLabel(action, detail) {
 // speziellere Muster vor allgemeinen.
 const TICKET_ACTION_BY_TEXT = [
   [/wieder geöffnet|wieder geoeffnet/i, 'reopened'],
-  [/Freigabe beantragt/i, 'release_requested'],
+  [/Freigabe zur Schliessung beantragt|Freigabe zur Schließung beantragt|Freigabe beantragt/i, 'release_requested'],
   [/Übernahme von .* aufgehoben|Übernahme von .* freigegeben|freigegeben|aufgehoben/i, 'unclaimed'],
   [/Übernommen von/i, 'claimed'],
   [/Übergeben an|übergeben/i, 'transferred'],
@@ -321,7 +325,7 @@ const TICKET_ACTION_BY_TEXT = [
   [/erstellt/i, 'created'],
 ];
 const ACCOUNT_ACTION_BY_TEXT = [
-  [/Inhaber-Account/i, 'hrhr_created'],
+  [/HR-HR-Account|Inhaber-Account/i, 'hrhr_created'],
   [/IT-Alarm deaktiviert/i, 'alarm_cleared'],
   [/IT-Alarm gesetzt/i, 'alarm_set'],
   [/Backups manuell gelöscht/i, 'backups_cleared'],
@@ -329,13 +333,16 @@ const ACCOUNT_ACTION_BY_TEXT = [
   [/Automatische Reaktivierung/i, 'enabled_auto'],
   [/Automatische Löschung/i, 'deleted_auto'],
   [/Löschung geplant/i, 'delete_scheduled'],
+  [/reaktiviert/i, 'enabled'],
+  [/E-Mail verifiziert|Einladung abgeschlossen|Konto aktiviert|aktiviert/i, 'activated'],
+  [/Eingeladen als/i, 'invited'],
+  [/Passwort per .* zurückgesetzt|Passwort-Reset|Passwort per "Vergessen"/i, 'password_reset'],
   [/Rolle/i, 'role_changed'],
   [/Notiz/i, 'note_added'],
   [/gesperrt/i, 'lockdown_enabled'],
   [/freigegeben/i, 'lockdown_disabled'],
   [/Löschung|gelöscht/i, 'deleted'],
   [/deaktiviert/i, 'disabled'],
-  [/reaktiviert|aktiviert/i, 'enabled'],
 ];
 
 function guessTicketAction(details) {
@@ -361,7 +368,7 @@ function guessAccountAction(reason) {
 function migrateLogActions() {
   try {
     const rows = db.prepare(
-      "SELECT id, details FROM ticket_logs WHERE action IS NULL OR trim(action) = '' OR action = 'unbekannt'"
+      "SELECT id, details FROM ticket_logs WHERE action IS NULL OR lower(trim(action)) IN ('', 'unbekannt')"
     ).all();
     const upd = db.prepare('UPDATE ticket_logs SET action = ? WHERE id = ?');
     for (const r of rows) {
@@ -370,7 +377,7 @@ function migrateLogActions() {
   } catch {}
   try {
     const rows = db.prepare(
-      "SELECT id, reason FROM account_logs WHERE action IS NULL OR trim(action) = '' OR action = 'unbekannt'"
+      "SELECT id, reason FROM account_logs WHERE action IS NULL OR lower(trim(action)) IN ('', 'unbekannt')"
     ).all();
     const upd = db.prepare('UPDATE account_logs SET action = ? WHERE id = ?');
     for (const r of rows) {

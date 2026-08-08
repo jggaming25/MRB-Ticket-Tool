@@ -31,13 +31,13 @@
           </form>
         <% } %>
         <% if (canClose) { %>
-          <form method="post" action="/tickets/<%= ticket.id %>/close" class="inline-form"
+          <form method="post" action="/tickets/<%= ticket.id %>/close?ctx=admin" class="inline-form"
                 data-confirm="Ticket wirklich schließen? Nur der Inhaber kann das rückgängig machen.">
             <button type="submit" class="btn btn-danger">Ticket schließen</button>
           </form>
         <% } %>
         <% if (canReopen) { %>
-          <form method="post" action="/tickets/<%= ticket.id %>/reopen" class="inline-form"
+          <form method="post" action="/tickets/<%= ticket.id %>/reopen?ctx=admin" class="inline-form"
                 data-confirm="Ticket wieder öffnen?">
             <button type="submit" class="btn btn-primary">Wieder öffnen</button>
           </form>
@@ -131,7 +131,7 @@
       <% } else if (canEdit) { %>
         <div class="card reply-card mrb-lockable">
           <h3>Antworten</h3>
-          <form method="post" action="/tickets/<%= ticket.id %>/message" enctype="multipart/form-data" id="reply-form">
+          <form method="post" action="/tickets/<%= ticket.id %>/message<%= fromAdmin ? '?ctx=admin' : '' %>" enctype="multipart/form-data" id="reply-form">
             <div class="form-group">
               <textarea id="reply-body" name="body" rows="4" placeholder="Schreibe deine Antwort ..." data-autosave="reply:<%= ticket.id %>"></textarea>
               <p class="hint">Der Entwurf wird alle 30 Sekunden automatisch gespeichert.</p>

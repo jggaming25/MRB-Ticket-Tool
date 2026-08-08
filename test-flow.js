@@ -297,6 +297,13 @@ function findMail(subjectPart) {
   r = await get(ticketUrl, hrCookie);
   ok('HR darf fremdes Ticket sehen', r.status === 200);
 
+  // "Zum Schließen Freigeben" erst möglich, wenn das Ticket übernommen wurde
+  r = await get(ticketUrl + '?ctx=admin', hrCookie);
+  ok('Ohne Übernahme: kein "Zum Schließen Freigeben"-Button', !r.body.includes('Zum Schließen Freigeben'), 'Button trotzdem sichtbar');
+  r = await post(`/admin/tickets/${ticketId}/release`, {}, hrCookie);
+  const noClaimTicket = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId);
+  ok('Ohne Übernahme: Freigabe abgelehnt, Ticket bleibt offen', r.status === 302 && noClaimTicket.status === 'open', `status=${noClaimTicket.status}`);
+
   // Write-Lock: nur ein Bearbeiter darf gleichzeitig in einem Ticket eintragen
   const hr2Id = db.prepare("INSERT INTO users (discord_id, discord_username, username, role, status) VALUES ('600','hr2','HR2','hr','active')").run().lastInsertRowid;
   const hr2Cookie = await cookieFor(hr2Id);
@@ -316,14 +323,16 @@ function findMail(subjectPart) {
 
   // HR claimt das Ticket -> nur der Claimer darf es bearbeiten
   r = await post(`/admin/tickets/${ticketId}/claim`, {}, hrCookie);
-  ok('HR claimt Ticket', r.status === 302 && r.location === ticketUrl);
+  ok('HR claimt Ticket', r.status === 302 && r.location === ticketUrl + '?ctx=admin', r.location);
   const claimedTicket = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId);
   ok('Claim: claimed_by gesetzt + Status pending', claimedTicket.claimed_by === hrUser.id && claimedTicket.status === 'pending', `by=${claimedTicket.claimed_by} status=${claimedTicket.status}`);
   ok('Claim: Faelligkeit wurde gesetzt', !!claimedTicket.due_at, claimedTicket.due_at || 'fehlt');
 
   r = await get(ticketUrl, hrCookie);
+  ok('Meine-Tickets-Kontext: keine Verwaltungs-Buttons', !r.body.includes('Freigeben') && !r.body.includes('Zum Schließen Freigeben'), 'Buttons trotzdem sichtbar');
+  r = await get(ticketUrl + '?ctx=admin', hrCookie);
   ok('Bearbeiter sieht "Freigeben"-Button nach Übernahme', r.body.includes('Freigeben'), 'Freigeben fehlt');
-  r = await get(ticketUrl, hrhrCookie);
+  r = await get(ticketUrl + '?ctx=admin', hrhrCookie);
   ok('Jeder Bearbeiter sieht "Zum Schließen Freigeben"-Button', r.body.includes('Zum Schließen Freigeben'), 'Zum Schließen Freigeben fehlt');
 
   r = await post(ticketUrl + '/message', { body: 'HR-HR versucht zu antworten' }, hrhrCookie);
@@ -353,7 +362,7 @@ function findMail(subjectPart) {
 
   // Übergabe: HR uebergibt an HR-HR (mit Begründung)
   r = await post(`/admin/tickets/${ticketId}/transfer`, { assignee: String(hrhrUser.id), reason: 'Weil HR-HR das Problem kennt' }, hrCookie);
-  ok('HR uebergibt Ticket an HR-HR', r.status === 302 && r.location === ticketUrl);
+  ok('HR uebergibt Ticket an HR-HR', r.status === 302 && r.location === ticketUrl + '?ctx=admin', r.location);
   const transferred = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId);
   ok('Übergabe: neuer Claimer = HR-HR, Status pending', transferred.claimed_by === hrhrUser.id && transferred.status === 'pending', `by=${transferred.claimed_by}`);
   mail = findMail('übergeben');
@@ -552,6 +561,30 @@ function findMail(subjectPart) {
   ok('Backfill: Ticket-Aktion aus Details rekonstruiert', backfilledTicket && backfilledTicket.action === 'closed', `action=${backfilledTicket && backfilledTicket.action}`);
   ok('LogLabel: bekannte Aktion -> deutsches Label', logActionLabel('created') === 'Erstellt', logActionLabel('created'));
   ok('LogLabel: unbekannte Aktion -> Unbekannt', logActionLabel('') === 'Unbekannt');
+  ok('LogLabel: Legacy-Aktion activated -> deutsches Label', logActionLabel('activated') === 'Konto aktiviert', logActionLabel('activated'));
+  ok('LogLabel: Legacy-Aktion invited -> deutsches Label', logActionLabel('invited') === 'Eingeladen', logActionLabel('invited'));
+  ok('LogLabel: Legacy-Aktion password_reset -> deutsches Label', logActionLabel('password_reset') === 'Passwort zurückgesetzt', logActionLabel('password_reset'));
+
+  // Legacy-Backfill: alte Detail-/Begruendungstexte werden korrekt rekonstruiert
+  const legacyCases = [
+    { table: 'account_logs', col: 'reason', text: 'E-Mail verifiziert, Konto aktiviert', want: 'activated' },
+    { table: 'account_logs', col: 'reason', text: 'HR-Einladung abgeschlossen, Passwort gesetzt', want: 'activated' },
+    { table: 'account_logs', col: 'reason', text: 'Passwort per "Vergessen"-Link zurückgesetzt', want: 'password_reset' },
+    { table: 'account_logs', col: 'reason', text: 'Passwort-Reset per Admin ausgelöst', want: 'password_reset' },
+    { table: 'account_logs', col: 'reason', text: 'Eingeladen als HR (test, test@example.com)', want: 'invited' },
+    { table: 'account_logs', col: 'reason', text: 'HR-HR-Account per Discord-Registrierung angelegt', want: 'hrhr_created' },
+    { table: 'account_logs', col: 'reason', text: 'Reaktiviert', want: 'enabled' },
+    { table: 'ticket_logs', col: 'details', text: 'Freigabe zur Schliessung beantragt (Abschlussbericht eingereicht)', want: 'release_requested' },
+  ];
+  for (const c of legacyCases) {
+    db.prepare(`INSERT INTO ${c.table} (${c.table === 'account_logs' ? 'account_id, actor_id' : 'ticket_id, actor_id'}, action, ${c.col}) VALUES (?, ?, ?, ?)`)
+      .run(c.table === 'account_logs' ? normalUser.id : ticketId, hrhrUser.id, 'unbekannt', c.text);
+  }
+  migrateLogActions();
+  for (const c of legacyCases) {
+    const row = db.prepare(`SELECT action FROM ${c.table} WHERE ${c.col} = ?`).get(c.text);
+    ok(`Backfill: "${c.text.slice(0, 30)}" -> ${c.want}`, row && row.action === c.want, `action=${row && row.action}`);
+  }
 
   // ==================================================================
   // 8) Kontoeinstellungen + Benachrichtigungen
