@@ -174,11 +174,23 @@ db.exec(`
     added_at  TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
+  -- Voice-Support: aufgezeichnete Gespräche (dauerhaft, Löschung nach 4 Monaten).
+  CREATE TABLE IF NOT EXISTS call_recordings (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    call_id    INTEGER NOT NULL REFERENCES support_calls(id) ON DELETE CASCADE,
+    staff_id   INTEGER,
+    mime       TEXT,
+    size       INTEGER NOT NULL DEFAULT 0,
+    data       BLOB NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
   CREATE INDEX IF NOT EXISTS idx_tickets_user ON tickets(user_id);
   CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status);
   CREATE INDEX IF NOT EXISTS idx_messages_ticket ON messages(ticket_id);
   CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
   CREATE INDEX IF NOT EXISTS idx_support_calls_status ON support_calls(status);
+  CREATE INDEX IF NOT EXISTS idx_call_recordings_created ON call_recordings(created_at);
 `);
 
 // Sanfte Migration fuer bestehende Datenbanken (neue Spalten ergaenzen).

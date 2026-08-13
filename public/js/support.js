@@ -55,31 +55,55 @@
   }
 
   // ---- Warteschleifenmusik & Signaltöne ------------------------------------
-  // Spielt einen vom Inhaber hochgeladenen Song aus der Datenbank
-  // (/api/support/hold-music). Bei mehreren Songs wird pro Anruf zufällig
-  // einer gewählt. Ohne hochgeladene Songs fällt er auf die mitgelieferte
-  // Standard-Warteschleifenmusik und schließlich einen sanften Synth-Loop zurück.
+  // Spielt alle vom Inhaber hochgeladenen Songs aus der Datenbank
+  // (/api/support/hold-music) in zufälliger Reihenfolge als Endlosschleife.
+  // Ohne hochgeladene Songs fällt er auf die mitgelieferte Standard-
+  // Warteschleifenmusik und schließlich einen sanften Synth-Loop zurück.
   function HoldMusic() {
     let audio = null;
     let playing = false;
     let synth = null;
-    let songs = [];
+    let playlist = [];
+    let index = 0;
+    let endHandlerAttached = false;
     const DEFAULT_SRC = '/static/audio/hold-music.wav';
 
+    function shuffle(arr) {
+      const a = arr.slice();
+      for (let i = a.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [a[i], a[j]] = [a[j], a[i]];
+      }
+      return a;
+    }
+
     async function loadSongs() {
+      let songs = [];
       try {
         const r = await fetch('/api/support/hold-music', { cache: 'no-store' });
         const j = await r.json();
         if (j.ok && Array.isArray(j.songs)) songs = j.songs.filter((s) => s && s.id);
       } catch (e) { songs = []; }
+      playlist = songs.length
+        ? shuffle(songs.map((s) => `/api/support/hold-music/${s.id}`))
+        : [DEFAULT_SRC];
+      index = 0;
     }
 
-    function pickSrc() {
-      if (songs.length) {
-        const s = songs[Math.floor(Math.random() * songs.length)];
-        return `/api/support/hold-music/${s.id}`;
+    function playIndex(i) {
+      index = ((i % playlist.length) + playlist.length) % playlist.length;
+      try {
+        audio.src = playlist[index];
+        const p = audio.play();
+        if (p && typeof p.catch === 'function') {
+          p.catch(() => {
+            if (playlist.length > 1) playIndex(index + 1);
+            else startSynth();
+          });
+        }
+      } catch (e) {
+        startSynth();
       }
-      return DEFAULT_SRC;
     }
 
     function startSynth() {
@@ -122,19 +146,23 @@
     this.start = async function () {
       if (playing) return;
       playing = true;
-      if (!songs.length) await loadSongs();
-      const src = pickSrc();
+      if (!playlist.length) await loadSongs();
       try {
         if (!audio) {
           audio = new Audio();
-          audio.loop = true;
           audio.volume = 0.4;
+          endHandlerAttached = false;
         }
-        audio.src = src;
-        const p = audio.play();
-        if (p && typeof p.catch === 'function') {
-          p.catch(() => startSynth()); // z. B. Autoplay-Sperre beim Wiederaufnehmen
+        if (!endHandlerAttached) {
+          endHandlerAttached = true;
+          audio.addEventListener('ended', () => {
+            if (playing) playIndex(index + 1); // nächster Song
+          });
+          audio.addEventListener('error', () => {
+            if (playing && playlist.length > 1) playIndex(index + 1);
+          });
         }
+        playIndex(0);
       } catch (e) {
         startSynth();
       }
@@ -286,25 +314,16 @@
         queueList.innerHTML = '<p class="muted">Keine wartenden Anrufer.</p>';
         return;
       }
+      // Wartende Anrufer werden automatisch verbunden, sobald ein Mitarbeiter
+      // frei ist – kein manuelles Annehmen nötig.
       queueList.innerHTML = `<ul class="queue-list">${queue.map((c) => `
         <li class="queue-item">
           <div class="queue-item-main">
             <strong>${esc(c.callerName)}</strong>
             <span class="muted">${esc(c.display)} · Position ${c.position} · seit ${fmtTime(c.joinedAt)}</span>
           </div>
-          <button class="btn btn-sm" data-accept="${c.id}">Anruf annehmen</button>
+          <span class="tag">Wird automatisch verbunden</span>
         </li>`).join('')}</ul>`;
-      queueList.querySelectorAll('[data-accept]').forEach((b) => {
-        b.addEventListener('click', () => acceptFromQueue(Number(b.dataset.accept)));
-      });
-    }
-
-    async function acceptFromQueue(callId) {
-      const r = await post('/api/support/call/accept', { callId });
-      if (r.ok) { currentCallId = callId; notifyInPage('📞 Anruf angenommen', 'Warte auf die Verbindung zum Anrufer.', '/support/staff'); }
-      else if (r.reason === 'notclocked') alert('Bitte stempel dich zuerst ein, um Anrufe anzunehmen.');
-      else if (r.reason === 'busy') alert('Du hast bereits einen aktiven Anruf.');
-      else alert('Der Anruf ist nicht mehr verfügbar.');
     }
 
     async function handleMyCall(callId) {
@@ -358,14 +377,113 @@
       }
     }
 
+    // ---- Aufzeichnung (jedes Gespräch wird aufgezeichnet) ------------------
+    // Der Staff-Mix (eigenes Mikro + Stimme des Anrufers) wird im Browser
+    // zusammengemischt und als Audio-Datei an den Server hochgeladen.
+    let recorder = null;
+    let recorderChunks = [];
+    let recorderMix = null;
+    let recordingActive = false;
+    let recordingCallId = null;
+
+    function pickRecorderMime() {
+      if (!window.MediaRecorder) return '';
+      const opts = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/ogg'];
+      for (const m of opts) if (MediaRecorder.isTypeSupported(m)) return m;
+      return '';
+    }
+
+    function startRecording(callId) {
+      if (recordingActive) {
+        if (recordingCallId === callId) return;
+        stopRecording();
+      }
+      try {
+        const local = CallManager.localStream;
+        const remote = CallManager.remoteStream;
+        if (!local || !remote || !remote.getAudioTracks().length) return; // beim nächsten Poll erneut versuchen
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const dest = ctx.createMediaStreamDestination();
+        ctx.createMediaStreamSource(local).connect(dest);
+        ctx.createMediaStreamSource(remote).connect(dest);
+        const mime = pickRecorderMime();
+        const rec = new MediaRecorder(dest.stream, mime ? { mimeType: mime } : undefined);
+        recorderChunks = [];
+        rec.addEventListener('dataavailable', (e) => {
+          if (e.data && e.data.size) recorderChunks.push(e.data);
+        });
+        rec.start(1000);
+        recorder = rec;
+        recorderMix = { ctx, dest };
+        recordingActive = true;
+        recordingCallId = callId;
+      } catch (e) {
+        console.error('Aufzeichnung fehlgeschlagen:', e);
+      }
+    }
+
+    function stopRecording() {
+      if (!recordingActive || !recorder) return;
+      const rec = recorder;
+      recorder = null;
+      const mix = recorderMix;
+      recorderMix = null;
+      const callId = recordingCallId;
+      recordingCallId = null;
+      recordingActive = false;
+      const chunks = recorderChunks;
+      recorderChunks = [];
+      rec.addEventListener('stop', () => {
+        if (mix) { try { mix.ctx.close(); } catch (e) { /* ignore */ } }
+        const blob = new Blob(chunks, { type: rec.mimeType || 'audio/webm' });
+        uploadRecording(callId, blob);
+      });
+      try { rec.stop(); } catch (e) { /* ignore */ }
+    }
+
+    async function uploadRecording(callId, blob) {
+      if (!callId || !blob || !blob.size) return;
+      try {
+        const fd = new FormData();
+        fd.append('recording', blob, `call-${callId}.webm`);
+        const r = await fetch(`/api/support/call/${callId}/recording`, { method: 'POST', body: fd });
+        const j = await r.json().catch(() => ({}));
+        if (j.ok) console.log(`Aufzeichnung von Anruf #SUP-${String(callId).padStart(4, '0')} gespeichert.`);
+        else console.warn('Aufzeichnung konnte nicht gespeichert werden:', j.reason || j.error);
+      } catch (e) {
+        console.error('Upload der Aufzeichnung fehlgeschlagen:', e);
+      }
+    }
+
+    // ---- Bestätigungsdialog: Hinweis zur Aufzeichnung ----------------------
+    const consentModal = $('recordConsentModal');
+
+    function openRecordConsent(cb) {
+      if (!consentModal) return cb();
+      show(consentModal);
+      const ok = $('recordConsentOk');
+      const cancel = $('recordConsentCancel');
+      const done = (accept) => {
+        hide(consentModal);
+        ok.removeEventListener('click', onOk);
+        cancel.removeEventListener('click', onCancel);
+        if (accept) cb();
+      };
+      const onOk = () => done(true);
+      const onCancel = () => done(false);
+      ok.addEventListener('click', onOk);
+      cancel.addEventListener('click', onCancel);
+    }
+
     function renderMyCall(info) {
       if (!info) { myCallContent.innerHTML = '<p class="muted">Kein aktiver Anruf.</p>'; return; }
       if (info.ended) { myCallContent.innerHTML = `<p>${esc(info.text)}</p>`; return; }
       myCallContent.innerHTML = `
         <div class="my-call">
-          <span class="badge ${info.status === 'active' ? 'badge-active' : 'badge-ringing'}">${info.status === 'active' ? 'Im Gespräch' : 'Klingelt'}</span>
+          <span class="badge ${info.status === 'active' ? 'badge-active' : 'badge-ringing'}">${info.status === 'active' ? 'Im Gespräch' : 'Wird verbunden'}</span>
           <strong>${esc(info.display)}</strong>
           <span class="muted">Anrufer: ${esc(info.callerName || '–')}</span>
+          <p class="muted small" id="recordingStatus">${recordingActive ? '🎙️ Aufzeichnung läuft' : ''}</p>
           <div class="my-call-actions">
             <button class="btn btn-sm" id="staffMuteBtn">🔇 Stumm</button>
             <button class="btn btn-danger btn-sm" id="staffHangupBtn">Beenden</button>
@@ -384,16 +502,22 @@
         CallManager.cleanup();
         currentCallId = null;
         offerSentFor = null;
+        stopRecording();
       });
     }
 
-    shiftBtn.addEventListener('click', async () => {
+    async function toggleShift() {
       if (!clockedIn && Notification.permission !== 'granted' && 'Notification' in window) {
         const p = await Notification.requestPermission();
         if (p === 'granted') ensurePush();
       }
       const r = clockedIn ? await post('/api/support/clockout') : await post('/api/support/clockin');
       if (r.ok) refreshStaff();
+    }
+
+    shiftBtn.addEventListener('click', () => {
+      if (!clockedIn) openRecordConsent(toggleShift);
+      else toggleShift();
     });
 
     async function refreshStaff() {
@@ -401,11 +525,17 @@
       if (!st.hotline) return;
       renderShift(st);
       renderQueue(st.queue || []);
-      if (st.myCall) handleMyCall(st.myCall.id);
-      else if (currentCallId) {
+      if (st.myCall) {
+        handleMyCall(st.myCall.id);
+        if (st.myCall.status === 'active') startRecording(st.myCall.id);
+        else stopRecording();
+        const rs = $('recordingStatus');
+        if (rs) rs.textContent = recordingActive ? '🎙️ Aufzeichnung läuft' : '';
+      } else if (currentCallId) {
         CallManager.cleanup();
         currentCallId = null;
         offerSentFor = null;
+        stopRecording();
         renderMyCall(null);
       }
     }

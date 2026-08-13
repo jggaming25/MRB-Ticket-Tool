@@ -252,6 +252,17 @@ const audioUpload = multer({
   },
 });
 
+// Upload für aufgezeichnete Gespräche (vom Staff-Client, audio/webm o. ä.).
+const recordingUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50 MB
+  fileFilter: (req, file, cb) => {
+    const m = String(file.mimetype || '');
+    if (m.startsWith('audio/') || m === 'application/ogg') cb(null, true);
+    else cb(new Error('Ungültiges Audioformat für die Aufzeichnung.'));
+  },
+});
+
 // ---------------------------------------------------------------------------
 // Helfer
 // ---------------------------------------------------------------------------
@@ -590,7 +601,7 @@ app.get('/account/settings', requireLogin, (req, res) => {
       backups: backups.listBackups(),
       backupSlotsFree: backups.slotsFree(),
       backupMax: backups.maxSlots(),
-      support: { ...support.getSettings(), hotline: support.hotlineNumber(), holdMusic: support.listHoldMusic() },
+      support: { ...support.getSettings(), hotline: support.hotlineNumber(), holdMusic: support.listHoldMusic(), recordings: support.listRecordings() },
     } : null,
   });
 });
@@ -742,6 +753,53 @@ app.get('/api/support/hold-music/:id', requireLogin, (req, res) => {
   res.send(buf);
 });
 
+// Aufzeichnung eines Support-Anrufs hochladen (nur der zugewiesene Mitarbeiter).
+app.post('/api/support/call/:id/recording', requireLogin, requireHR, (req, res) => {
+  recordingUpload.single('recording')(req, res, (err) => {
+    if (err) return res.status(400).json({ ok: false, error: err.message });
+    if (!req.file || !req.file.buffer || req.file.buffer.length === 0) {
+      return res.status(400).json({ ok: false, error: 'Keine Aufzeichnung hochgeladen.' });
+    }
+    const result = support.addCallRecording({
+      callId: req.params.id,
+      staffId: req.user.id,
+      mime: req.file.mimetype || 'audio/webm',
+      size: req.file.buffer.length,
+      data: req.file.buffer,
+    });
+    if (!result.ok) {
+      const code = result.reason === 'forbidden' ? 403 : 404;
+      return res.status(code).json({ ok: false, reason: result.reason });
+    }
+    res.json({ ok: true, id: result.id });
+  });
+});
+
+// Admin: Aufzeichnung anhören/herunterladen.
+app.get('/api/support/recordings/:id', requireRoot, (req, res) => {
+  const rec = support.getCallRecording(req.params.id);
+  if (!rec) return renderError(res, 404, 'Nicht gefunden', 'Die Aufzeichnung existiert nicht (mehr).');
+  const buf = Buffer.from(rec.data);
+  res.setHeader('Content-Type', rec.mime || 'audio/webm');
+  res.setHeader('Content-Length', buf.length);
+  res.setHeader('Content-Disposition', `inline; filename="aufzeichnung-call-${rec.call_id}.webm"`);
+  res.setHeader('Cache-Control', 'no-store');
+  res.send(buf);
+});
+
+// Admin: Aufzeichnung löschen.
+app.post('/account/settings/admin/support/recordings/:id/delete', requireRoot, (req, res) => {
+  const rec = support.getCallRecording(req.params.id);
+  if (rec) {
+    support.deleteCallRecording(rec.id);
+    logAccountAction(req.user.id, req.user.id, 'recording_removed', `Aufzeichnung zu Anruf #SUP-${String(rec.call_id).padStart(4, '0')} gelöscht.`);
+    flash(req, 'success', 'Aufzeichnung gelöscht.');
+  } else {
+    flash(req, 'error', 'Aufzeichnung nicht gefunden.');
+  }
+  res.redirect('/account/settings');
+});
+
 // Systemneustart: Prozess wird beendet (Render startet ihn neu)
 app.post('/account/settings/admin/restart', requireRoot, (req, res) => {
   logAccountAction(req.user.id, req.user.id, 'system_restart', 'Systemneustart angefordert.');
@@ -872,15 +930,6 @@ app.get('/api/support/staff/state', requireLogin, requireHR, (req, res) => {
 // Anruf starten (legt ggf. Warteschlangen-Eintrag an / weist zu).
 app.post('/api/support/call/start', requireLogin, supportApiLimiter, (req, res) => {
   res.json(support.startCall(req.user.id));
-});
-
-// Anruf annehmen (zugewiesen oder aus der Warteschlange).
-app.post('/api/support/call/accept', requireLogin, requireHR, (req, res) => {
-  const callId = Number((req.body || {}).callId);
-  if (!Number.isInteger(callId) || callId <= 0) {
-    return res.status(400).json({ ok: false, reason: 'invalid' });
-  }
-  res.json(support.acceptCall(req.user.id, callId));
 });
 
 // Anruf beenden (Anrufer oder zugewiesener Mitarbeiter).

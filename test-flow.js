@@ -874,6 +874,41 @@ function findMail(subjectPart) {
   support.deleteHoldMusic(songId);
   ok('Support: Hold-Music-Song gelöscht', support.getHoldMusic(songId) === null && !support.listHoldMusic().some((s) => s.id === songId));
 
+  // Aufzeichnungen: nur der zugewiesene Mitarbeiter darf hochladen.
+  const recCall = db.prepare('SELECT id, staff_id FROM support_calls WHERE id = ?').get(callId);
+  const recData = Buffer.from([0x1f, 0x8b, 0x08, 0x00]);
+
+  r = await post(`/api/support/call/${callId}/recording`, { recording: 'x' }, userCookie);
+  ok('Support: Aufzeichnung-Upload fuer normale Nutzer verweigert (403)', r.status === 403);
+
+  const notAssigned = support.addCallRecording({ callId, staffId: 999999, mime: 'audio/webm', size: recData.length, data: recData });
+  ok('Support: Aufzeichnung durch nicht-zugewiesenen User abgelehnt', notAssigned.ok === false && notAssigned.reason === 'forbidden');
+
+  // Echter Multipart-Upload über die Route (Mitarbeiter).
+  const fd = new FormData();
+  fd.append('recording', new Blob([recData], { type: 'audio/webm' }), 'call.webm');
+  const upRes = await fetch(base + `/api/support/call/${callId}/recording`, {
+    method: 'POST', headers: { cookie: hrCookie }, body: fd, redirect: 'manual',
+  });
+  ok('Support: Aufzeichnung hochgeladen (zugewiesener Mitarbeiter)', upRes.status === 200 && JSON.parse(await upRes.text()).ok === true);
+  const recList = support.listRecordings();
+  const recEntry = recList.find((x) => x.call_id === callId);
+  ok('Support: Aufzeichnung in der Liste', !!recEntry);
+
+  r = await get(`/api/support/recordings/${recEntry.id}`, userCookie);
+  ok('Support: Aufzeichnung nicht fuer normale Nutzer abrufbar (403)', r.status === 403);
+  r = await get(`/api/support/recordings/${recEntry.id}`, hrhrCookie);
+  ok('Support: Inhaber kann Aufzeichnung abrufen', r.status === 200 && r.headers.get('content-type') === 'audio/webm' && r.body.length === recData.length);
+
+  // 4-Monats-Löschung (Retention).
+  const oldRec = support.addCallRecording({ callId, staffId: recCall.staff_id, mime: 'audio/webm', size: 2, data: Buffer.from([0xaa, 0xbb]) });
+  db.prepare('UPDATE call_recordings SET created_at = ? WHERE id = ?').run('2020-01-01 00:00:00', oldRec.id);
+  const removedCount = support.cleanupOldRecordings(4);
+  ok('Support: Aufzeichnungen aelter als 4 Monate geloescht', removedCount >= 1 && support.getCallRecording(oldRec.id) === null);
+
+  support.deleteCallRecording(recEntry.id);
+  ok('Support: Aufzeichnung geloescht', support.getCallRecording(recEntry.id) === null);
+
   const logoutRes = await fetch(base + '/auth/logout', {
     method: 'POST', headers: { cookie: userCookie }, redirect: 'manual',
   });

@@ -184,6 +184,41 @@
 
       <hr class="admin-sep">
 
+      <h3>Aufzeichnungen</h3>
+      <p class="hint">
+        Alle Gespräche im Voice-Support werden vom Mitarbeiter automatisch aufgezeichnet.
+        Aufzeichnungen werden nach <strong>4 Monaten automatisch gelöscht</strong>.
+      </p>
+      <% if (adminData.support.recordings && adminData.support.recordings.length) { %>
+        <table class="table table-compact" style="margin-top:14px;">
+          <thead>
+            <tr><th>Anruf</th><th>Datum</th><th>Anrufer</th><th>Mitarbeiter</th><th>Größe</th><th></th></tr>
+          </thead>
+          <tbody>
+            <% adminData.support.recordings.forEach((r) => { %>
+              <tr>
+                <td><strong><%= '#SUP-' + String(r.call_id).padStart(4, '0') %></strong></td>
+                <td class="muted small"><%= fmtDate(r.created_at) %></td>
+                <td class="small"><%= r.caller_global || r.caller_username || '–' %></td>
+                <td class="small"><%= r.staff_global || r.staff_username || '–' %></td>
+                <td class="small"><%= r.size > 1048576 ? (r.size / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(r.size / 1024)) + ' KB' %></td>
+                <td class="small" style="white-space:nowrap;">
+                  <audio controls preload="none" src="/api/support/recordings/<%= r.id %>" style="height:32px;"></audio>
+                  <form method="post" action="/account/settings/admin/support/recordings/<%= r.id %>/delete" class="inline-form"
+                        data-confirm="Diese Aufzeichnung wirklich löschen?">
+                    <button type="submit" class="btn btn-sm btn-danger">Löschen</button>
+                  </form>
+                </td>
+              </tr>
+            <% }) %>
+          </tbody>
+        </table>
+      <% } else { %>
+        <p class="muted" style="margin-top:12px;">Noch keine Aufzeichnungen vorhanden.</p>
+      <% } %>
+
+      <hr class="admin-sep">
+
       <h3>System-Neustart</h3>
       <p class="hint">Startet den Server komplett neu (ca. 1–2 Minuten Ausfallzeit). Tickets und Daten bleiben erhalten.</p>
       <form method="post" action="/account/settings/admin/restart" class="inline-form">

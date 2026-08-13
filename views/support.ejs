@@ -38,6 +38,19 @@
       <h2>Deine letzten Schichten</h2>
       <div id="shiftHistory"></div>
     </div>
+
+    <div class="modal-overlay hidden" id="recordConsentModal">
+      <div class="modal">
+        <h3>Hinweis zur Aufzeichnung</h3>
+        <p>Wenn du dich in den Voice-Support einstempelst, werden <strong>alle Gespräche aufgezeichnet</strong> (zu Qualitäts- und Schulungszwecken).</p>
+        <p>Die Aufzeichnungen werden nach <strong>4 Monaten automatisch gelöscht</strong>.</p>
+        <p class="hint">Ohne deine Bestätigung kannst du dich nicht einstempeln.</p>
+        <div class="modal-actions">
+          <button class="btn btn-ghost" id="recordConsentCancel">Abbrechen</button>
+          <button class="btn btn-primary" id="recordConsentOk">Ich akzeptiere</button>
+        </div>
+      </div>
+    </div>
   <% } else { %>
     <h1 class="page-title">Voice-Support</h1>
     <p class="muted">Unser Team ist per Sprachanruf über die Website erreichbar – ganz ohne Telefonnummer, direkt hier.</p>
@@ -91,6 +104,7 @@
         <li>Sie bleiben so lange in der Schleife, bis ein Mitarbeiter frei wird – oder Sie legen selbst auf.</li>
       </ol>
       <p class="hint">Der Anruf läuft über verschlüsselte WebRTC-Verbindung direkt zwischen Ihrem Browser und dem Mitarbeiter.</p>
+      <p class="hint"><strong>Hinweis:</strong> Gespräche im Voice-Support werden aufgezeichnet und nach 4 Monaten automatisch gelöscht.</p>
     </div>
   <% } %>
 

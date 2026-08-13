@@ -236,11 +236,10 @@ function notifyStaffPush(staffId, call) {
     const name = caller ? (caller.global_name || caller.username) : 'ein Nutzer';
     push.sendToUser(staffId, {
       title: '📞 Neuer Support-Anruf',
-      body: `${callDisplayNumber(call.id)} von ${name} – jetzt auf der Website annehmen.`,
+      body: `${callDisplayNumber(call.id)} von ${name} – du wirst automatisch verbunden.`,
       url: '/support/staff',
       actions: [
         { action: 'open', title: 'To Website' },
-        { action: 'accept', title: 'Anruf annehmen' },
       ],
     });
   } catch (e) {
@@ -281,27 +280,6 @@ function startCall(userId) {
   const call = getCall(info.lastInsertRowid);
   // Sofort einem verfügbaren Mitarbeiter zuweisen, falls einer eingestempelt ist.
   assignWaitingCalls();
-  return { ok: true, call: getCall(call.id) };
-}
-
-function acceptCall(staffId, callId) {
-  const call = getCall(callId);
-  if (!call) return { ok: false, reason: 'notfound' };
-  if (call.status === 'ended' || call.status === 'timeout') {
-    return { ok: false, reason: 'ended' };
-  }
-  if (!isClockedIn(staffId)) {
-    return { ok: false, reason: 'notclocked' };
-  }
-  const busy = currentHandledCall(staffId);
-  if (busy) return { ok: false, reason: 'busy' };
-  // Nur der zugewiesene Mitarbeiter oder jeder eingestempelte bei "waiting".
-  if (call.status === 'ringing' && call.staff_id !== staffId) {
-    return { ok: false, reason: 'notassigned' };
-  }
-  db.prepare(`
-    UPDATE support_calls SET staff_id = ?, status = 'ringing', assigned_at = ? WHERE id = ?
-  `).run(staffId, call.status === 'ringing' ? call.assigned_at : nowIso(), call.id);
   return { ok: true, call: getCall(call.id) };
 }
 
@@ -432,6 +410,12 @@ function runScheduler() {
   const settings = getSettings();
   const now = Date.now();
 
+  // Alte Aufzeichnungen (älter als 4 Monate) einmal pro Tag löschen.
+  if (!runScheduler.lastRecordingCleanup || now - runScheduler.lastRecordingCleanup >= 24 * 3600 * 1000) {
+    try { cleanupOldRecordings(4); } catch (e) { console.error('Aufzeichnungs-Cleanup fehlgeschlagen:', e.message); }
+    runScheduler.lastRecordingCleanup = now;
+  }
+
   // Zugeteilter Mitarbeiter nimmt nicht rechtzeitig an -> zurück in die Warteschlange.
   const ringing = db.prepare(`
     SELECT * FROM support_calls WHERE status = 'ringing'
@@ -450,9 +434,10 @@ function runScheduler() {
 
 // ---------------------------------------------------------------------------
 // Warteschleifenmusik (dauerhaft in der DB gespeichert).
-// Der Inhaber kann Songs hochladen; pro Anruf wählt der Client zufällig
-// einen davon aus. Ist keine Datei vorhanden, greift der Client auf die
-// mitgelieferte Standard-Musik (public/audio/hold-music.wav) zurück.
+// Der Inhaber kann mehrere Songs hochladen; der Client spielt sie in der
+// Warteschleife in zufälliger Reihenfolge durch (Endlosschleife). Ist keine
+// Datei vorhanden, greift der Client auf die mitgelieferte Standard-Musik
+// (public/audio/hold-music.wav) zurück.
 // ---------------------------------------------------------------------------
 function listHoldMusic() {
   return db.prepare(`
@@ -476,6 +461,56 @@ function deleteHoldMusic(id) {
   db.prepare('DELETE FROM hold_music WHERE id = ?').run(Number(id));
 }
 
+// ---------------------------------------------------------------------------
+// Aufzeichnungen (Voice-Support).
+// Gespräche werden clientseitig vom zugewiesenen Mitarbeiter aufgezeichnet
+// und hier dauerhaft (in der DB) gespeichert. Alte Aufzeichnungen werden nach
+// 4 Monaten automatisch gelöscht (cleanupOldRecordings, läuft im Scheduler).
+// ---------------------------------------------------------------------------
+function addCallRecording({ callId, staffId, mime, size, data }) {
+  const call = getCall(callId);
+  if (!call) return { ok: false, reason: 'notfound' };
+  if (call.staff_id !== staffId) return { ok: false, reason: 'forbidden' };
+  const info = db.prepare(`
+    INSERT INTO call_recordings (call_id, staff_id, mime, size, data)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(call.id, staffId, String(mime || 'audio/webm'), Number(size) || 0, data);
+  return { ok: true, id: info.lastInsertRowid };
+}
+
+function listRecordings() {
+  return db.prepare(`
+    SELECT r.id, r.call_id, r.staff_id, r.mime, r.size, r.created_at,
+           cu.username AS caller_username, cu.global_name AS caller_global,
+           su.username AS staff_username, su.global_name AS staff_global
+    FROM call_recordings r
+    LEFT JOIN support_calls c ON c.id = r.call_id
+    LEFT JOIN users cu ON cu.id = c.caller_id
+    LEFT JOIN users su ON su.id = r.staff_id
+    ORDER BY r.id DESC
+  `).all();
+}
+
+function getCallRecording(id) {
+  return db.prepare('SELECT * FROM call_recordings WHERE id = ?').get(Number(id)) || null;
+}
+
+function deleteCallRecording(id) {
+  db.prepare('DELETE FROM call_recordings WHERE id = ?').run(Number(id));
+}
+
+// Löscht alle Aufzeichnungen, die älter als `months` sind (Standard: 4).
+function cleanupOldRecordings(months) {
+  const m = months == null ? 4 : Number(months);
+  const cutoff = new Date(Date.now() - m * 30 * 24 * 3600 * 1000)
+    .toISOString().slice(0, 19).replace('T', ' ');
+  const info = db.prepare('DELETE FROM call_recordings WHERE created_at < ?').run(cutoff);
+  if (info.changes > 0) {
+    console.log(`Aufzeichnungen bereinigt: ${info.changes} alte(r) Eintrag/Einträge gelöscht (älter als ${m} Monate).`);
+  }
+  return info.changes;
+}
+
 module.exports = {
   getSettings,
   saveSettings,
@@ -486,7 +521,6 @@ module.exports = {
   clockOut,
   shiftHistory,
   startCall,
-  acceptCall,
   endCall,
   setSignal,
   callStateFor,
@@ -501,4 +535,9 @@ module.exports = {
   getHoldMusic,
   addHoldMusic,
   deleteHoldMusic,
+  addCallRecording,
+  listRecordings,
+  getCallRecording,
+  deleteCallRecording,
+  cleanupOldRecordings,
 };

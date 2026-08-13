@@ -823,3 +823,33 @@ body.mrb-locked .mrb-lockable select {
 .badge-active { background: rgba(59, 165, 93, 0.2); color: #3ba55d; padding: 2px 8px; border-radius: 999px; font-size: 0.75rem; }
 .support-info ol { margin: 0 0 0 18px; padding: 0; }
 .support-info li { margin-bottom: 6px; }
+
+/* ---------- Modaler Bestätigungsdialog (Aufzeichnungs-Hinweis) ---------- */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 16px;
+}
+.modal {
+  background: var(--card-bg, #fff);
+  color: var(--text, #222);
+  border: 1px solid var(--border, #ddd);
+  border-radius: 12px;
+  max-width: 460px;
+  width: 100%;
+  padding: 24px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
+}
+.modal h3 { margin: 0 0 12px; }
+.modal p { margin: 0 0 10px; line-height: 1.5; }
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
+}
