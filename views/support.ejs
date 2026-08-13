@@ -139,9 +139,9 @@
   <script>
     window.SUPPORT_STAFF = <%= staff ? 'true' : 'false' %>;
     window.SUPPORT_POLL_MS = <%= pollMs %>;
-    window.SUPPORT_PUSH_KEY = <%= pushEnabled ? JSON.stringify(pushPublicKey) : 'null' %>;
+    window.SUPPORT_PUSH_KEY = <%- pushEnabled ? JSON.stringify(pushPublicKey) : 'null' %>;
     window.SUPPORT_NOTIFY = <%= user && user.notify_changes === 1 ? 'true' : 'false' %>;
-    window.SUPPORT_STUN = <%= JSON.stringify(stunServers) %>;
+    window.SUPPORT_STUN = <%- JSON.stringify(stunServers) %>;
   </script>
   <script src="/static/js/support.js?v=<%= assetVersion %>"></script>
 
