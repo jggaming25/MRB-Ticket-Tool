@@ -12,7 +12,6 @@
   const STAFF = window.SUPPORT_STAFF === true;
   const PUSH_KEY = window.SUPPORT_PUSH_KEY || '';
   const POLL_MS = Math.max(1000, Number(window.SUPPORT_POLL_MS) || 3000);
-  const ANNOUNCE_MS = Math.max(5000, Number(window.SUPPORT_ANNOUNCE_MS) || 30000);
   const STUN = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }];
 
   // ---- Kleine Helfer ------------------------------------------------------
@@ -56,13 +55,32 @@
   }
 
   // ---- Warteschleifenmusik & Signaltöne ------------------------------------
-  // Echte Warteschleifen-Musik (24-s-Loop, generiert in tools/hold-music-gen.js).
-  // Fällt bei Audio-Fehlern auf einen sanften synthetischen Loop zurück.
+  // Spielt einen vom Inhaber hochgeladenen Song aus der Datenbank
+  // (/api/support/hold-music). Bei mehreren Songs wird pro Anruf zufällig
+  // einer gewählt. Ohne hochgeladene Songs fällt er auf die mitgelieferte
+  // Standard-Warteschleifenmusik und schließlich einen sanften Synth-Loop zurück.
   function HoldMusic() {
     let audio = null;
     let playing = false;
     let synth = null;
-    const src = '/static/audio/hold-music.wav';
+    let songs = [];
+    const DEFAULT_SRC = '/static/audio/hold-music.wav';
+
+    async function loadSongs() {
+      try {
+        const r = await fetch('/api/support/hold-music', { cache: 'no-store' });
+        const j = await r.json();
+        if (j.ok && Array.isArray(j.songs)) songs = j.songs.filter((s) => s && s.id);
+      } catch (e) { songs = []; }
+    }
+
+    function pickSrc() {
+      if (songs.length) {
+        const s = songs[Math.floor(Math.random() * songs.length)];
+        return `/api/support/hold-music/${s.id}`;
+      }
+      return DEFAULT_SRC;
+    }
 
     function startSynth() {
       if (synth) return;
@@ -101,15 +119,18 @@
       }
     }
 
-    this.start = function () {
+    this.start = async function () {
       if (playing) return;
       playing = true;
+      if (!songs.length) await loadSongs();
+      const src = pickSrc();
       try {
         if (!audio) {
-          audio = new Audio(src);
+          audio = new Audio();
           audio.loop = true;
           audio.volume = 0.4;
         }
+        audio.src = src;
         const p = audio.play();
         if (p && typeof p.catch === 'function') {
           p.catch(() => startSynth()); // z. B. Autoplay-Sperre beim Wiederaufnehmen
@@ -145,76 +166,6 @@
       osc.start();
       osc.stop(t + 0.05);
     } catch (e) { /* ignore */ }
-  }
-
-  // ---- KI-Ansagen in der Warteschleife (deutsch + englisch) -----------------
-  // Sagt in regelmässigen Abständen die Position und die Anzahl verfügbarer
-  // Mitarbeiter an. Läuft nur, solange der Anrufer in der Warteschleife ist.
-  function Announcer() {
-    let muted = false;
-    let timer = null;
-    let enTimer = null;
-    let lastStatus = null;
-    const voices = window.speechSynthesis ? window.speechSynthesis.getVoices() : [];
-
-    function voiceFor(lang) {
-      if (!voices.length) {
-        // getVoices() kann initial leer sein -> beim onvoiceschanged nachladen
-        const all = window.speechSynthesis ? window.speechSynthesis.getVoices() : [];
-        return all.find((v) => v.lang && v.lang.toLowerCase().startsWith(lang)) || null;
-      }
-      return voices.find((v) => v.lang && v.lang.toLowerCase().startsWith(lang)) || null;
-    }
-
-    function speak(text, lang) {
-      if (!window.speechSynthesis || muted) return;
-      try {
-        const u = new SpeechSynthesisUtterance(text);
-        u.lang = lang;
-        u.rate = 0.95;
-        u.pitch = 1;
-        const v = voiceFor(lang);
-        if (v) u.voice = v;
-        window.speechSynthesis.speak(u);
-      } catch (e) { /* Sprachsynthese nicht verfügbar */ }
-    }
-
-    function say(status) {
-      if (muted || !status) return;
-      lastStatus = status;
-      const avail = status.availableStaff != null ? status.availableStaff : status.available;
-      const pos = status.queuePosition || 1;
-      const de = avail > 0
-        ? `Vielen Dank für Ihren Anruf beim MRB Support. Sie sind Position ${pos} in der Warteschleife. Es sind derzeit ${avail} Mitarbeiter verfügbar. Bitte bleiben Sie am Apparat.`
-        : 'Es ist derzeit kein Mitarbeiter verfügbar. Bitte bleiben Sie am Apparat. Ihr Anruf wird verbunden, sobald ein Mitarbeiter frei wird.';
-      const en = avail > 0
-        ? `Thank you for calling MRB support. You are number ${pos} in the queue. There are currently ${avail} staff members available. Please hold.`
-        : 'No staff members are available right now. Please stay on the line. Your call will be connected as soon as a staff member becomes available.';
-      speak(de, 'de-DE');
-      // Englische Ansage nach der deutschen abspielen
-      if (enTimer) clearTimeout(enTimer);
-      enTimer = setTimeout(() => speak(en, 'en-US'), 5000);
-    }
-
-    this.isMuted = () => muted;
-    this.setMuted = (m) => {
-      muted = !!m;
-      if (muted && window.speechSynthesis) window.speechSynthesis.cancel();
-    };
-    this.update = (status) => { lastStatus = status; };
-    this.start = (status) => {
-      this.stop();
-      lastStatus = status;
-      say(status);
-      timer = setInterval(() => say(lastStatus), ANNOUNCE_MS);
-    };
-    this.stop = () => {
-      if (timer) { clearInterval(timer); timer = null; }
-      if (enTimer) { clearTimeout(enTimer); enTimer = null; }
-      if (window.speechSynthesis) {
-        try { window.speechSynthesis.cancel(); } catch (e) { /* ignore */ }
-      }
-    };
   }
 
   // ---- WebRTC-Verwaltung ---------------------------------------------------
@@ -468,13 +419,11 @@
   // ANRUFER-SEITE (/support)
   // =========================================================================
   const waitMusic = new HoldMusic();
-  const announcer = new Announcer();
   let callId = null;
   let offerSent = false;
   let streamReady = false;
   let timerInt = null;
   let joinedAtMs = null;
-  let announcing = false;
 
   const startBtn = $('startCallBtn');
   const callAgainBtn = $('callAgainBtn');
@@ -482,15 +431,6 @@
   const hangupConnectingBtn = $('hangupConnectingBtn');
   const hangupActiveBtn = $('hangupActiveBtn');
   const muteBtn = $('muteBtn');
-  const announceMuteBtn = $('announceMuteBtn');
-  let announceMuted = false;
-  if (announceMuteBtn) {
-    announceMuteBtn.addEventListener('click', () => {
-      announceMuted = !announceMuted;
-      announcer.setMuted(announceMuted);
-      announceMuteBtn.textContent = announceMuted ? '🔇 Ansagen aus' : '🔊 Ansagen an';
-    });
-  }
 
   function showStage(name) {
     hide($('supportIdle'));
@@ -549,8 +489,6 @@
     showStage('waiting');
     startTimer();
     waitMusic.start();
-    announcer.start({ queuePosition: 1, availableStaff: null });
-    announcing = true;
     pollCall();
   }
 
@@ -578,8 +516,6 @@
       showStage('waiting');
       waitMusic.start();
       startTimer();
-      if (!announcing) { announcer.start(c); announcing = true; }
-      else announcer.update(c);
       text('queuePositionText', `Ihre Position in der Warteschlange: ${c.queuePosition}.`);
       return;
     }
@@ -587,8 +523,6 @@
       showStage('connecting');
       waitMusic.stop();
       stopTimer();
-      announcer.stop();
-      announcing = false;
       if (!streamReady) {
         try { await CallManager.getStream(); streamReady = true; } catch (e) { /* Mikrofon nicht verfügbar */ }
       }
@@ -608,16 +542,12 @@
       showStage('active');
       waitMusic.stop();
       stopTimer();
-      announcer.stop();
-      announcing = false;
       if (c.staffName) text('activeStaffName', c.staffName);
       return;
     }
     if (c.status === 'timeout') {
       waitMusic.stop();
       stopTimer();
-      announcer.stop();
-      announcing = false;
       playEndTone();
       text('endedTitle', 'Derzeit kein Mitarbeiter verfügbar');
       text('endedText', c.endedReason || 'Bitte versuchen Sie es später noch einmal.');
@@ -628,8 +558,6 @@
     if (c.status === 'ended') {
       waitMusic.stop();
       stopTimer();
-      announcer.stop();
-      announcing = false;
       text('endedTitle', 'Anruf beendet');
       text('endedText', c.endedReason || 'Vielen Dank für Ihren Anruf.');
       endCleanup();
@@ -643,8 +571,6 @@
     offerSent = false;
     streamReady = false;
     joinedAtMs = null;
-    announcing = false;
-    announcer.stop();
     CallManager.cleanup();
   }
 

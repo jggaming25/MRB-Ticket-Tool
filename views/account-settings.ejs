@@ -121,10 +121,6 @@
             <input type="text" name="hotlinePrefix" class="input" value="<%= adminData.support.hotlinePrefix %>" placeholder="z. B. 0800">
           </div>
           <div class="form-group">
-            <label class="small">KI-Ansage in der Warteschleife (Sekunden)</label>
-            <input type="number" name="announcementIntervalMs" class="input" min="5" max="600" value="<%= Math.round(adminData.support.announcementIntervalMs / 1000) %>">
-          </div>
-          <div class="form-group">
             <label class="small">Klingelzeit bis zurück in die Warteschlange (Sekunden)</label>
             <input type="number" name="ringTimeoutMs" class="input" min="5" max="120" value="<%= Math.round(adminData.support.ringTimeoutMs / 1000) %>">
           </div>
@@ -145,6 +141,46 @@
         <input type="text" name="queueEstimateLabel" class="input" value="<%= adminData.support.queueEstimateLabel %>">
         <button type="submit" class="btn btn-primary">Voice-Support-Einstellungen speichern</button>
       </form>
+
+      <h3 style="margin-top:22px;">Warteschleifenmusik</h3>
+      <p class="hint">
+        Lade hier Songs hoch – sie werden dauerhaft gespeichert und in der Warteschleife abgespielt.
+        Bei mehreren Songs wird pro Anruf zufällig einer ausgewählt. Ohne eigene Songs wird die Standard-Warteschleifenmusik verwendet.
+      </p>
+      <form method="post" action="/account/settings/admin/support/hold-music" enctype="multipart/form-data" class="admin-form">
+        <div class="form-row">
+          <div class="form-group">
+            <label class="small">Audiodatei (MP3, WAV, OGG, M4A, WEBM, AAC, FLAC; max. 20 MB)</label>
+            <input type="file" name="song" class="input" accept="audio/*,.mp3,.wav,.ogg,.m4a,.webm,.aac,.flac" required>
+          </div>
+        </div>
+        <button type="submit" class="btn btn-primary">Song hochladen</button>
+      </form>
+
+      <% if (adminData.support.holdMusic && adminData.support.holdMusic.length) { %>
+        <table class="table table-compact" style="margin-top:14px;">
+          <thead>
+            <tr><th>Song</th><th>Größe</th><th>Hochgeladen</th><th></th></tr>
+          </thead>
+          <tbody>
+            <% adminData.support.holdMusic.forEach((s) => { %>
+              <tr>
+                <td><strong><%= s.name %></strong></td>
+                <td class="small"><%= s.size > 1048576 ? (s.size / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(s.size / 1024)) + ' KB' %></td>
+                <td class="muted small"><%= fmtDate(s.added_at) %></td>
+                <td class="small" style="white-space:nowrap;">
+                  <form method="post" action="/account/settings/admin/support/hold-music/<%= s.id %>/delete" class="inline-form"
+                        data-confirm="Diesen Song wirklich löschen?">
+                    <button type="submit" class="btn btn-sm btn-danger">Löschen</button>
+                  </form>
+                </td>
+              </tr>
+            <% }) %>
+          </tbody>
+        </table>
+      <% } else { %>
+        <p class="muted" style="margin-top:12px;">Noch keine Songs hochgeladen – die Standard-Warteschleifenmusik wird verwendet.</p>
+      <% } %>
 
       <hr class="admin-sep">
 

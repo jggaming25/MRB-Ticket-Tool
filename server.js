@@ -237,6 +237,21 @@ const upload = multer({
   },
 });
 
+// Upload für Warteschleifenmusik (Hold-Music): Audio-Dateien, größer erlaubt.
+const AUDIO_MIME = new Set([
+  'audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/x-wav', 'audio/wave',
+  'audio/ogg', 'audio/webm', 'audio/mp4', 'audio/aac', 'audio/flac',
+  'audio/x-m4a', 'audio/m4a',
+]);
+const audioUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 20 * 1024 * 1024 }, // 20 MB
+  fileFilter: (req, file, cb) => {
+    if (AUDIO_MIME.has(file.mimetype)) cb(null, true);
+    else cb(new Error('Dateityp nicht erlaubt (MP3, WAV, OGG, M4A, WEBM, AAC oder FLAC).'));
+  },
+});
+
 // ---------------------------------------------------------------------------
 // Helfer
 // ---------------------------------------------------------------------------
@@ -575,7 +590,7 @@ app.get('/account/settings', requireLogin, (req, res) => {
       backups: backups.listBackups(),
       backupSlotsFree: backups.slotsFree(),
       backupMax: backups.maxSlots(),
-      support: { ...support.getSettings(), hotline: support.hotlineNumber() },
+      support: { ...support.getSettings(), hotline: support.hotlineNumber(), holdMusic: support.listHoldMusic() },
     } : null,
   });
 });
@@ -650,7 +665,6 @@ app.post('/account/settings/admin/support', requireRoot, (req, res) => {
   const s = (v) => { const n = Number(v); return Number.isFinite(n) ? String(Math.round(n)) : ''; };
   const result = support.saveSettings({
     // UI-Eingabe in Sekunden, Speicherung intern in Millisekunden
-    announcementIntervalMs: s(req.body.announcementIntervalMs) !== '' ? String(Number(s(req.body.announcementIntervalMs)) * 1000) : '',
     ringTimeoutMs: s(req.body.ringTimeoutMs) !== '' ? String(Number(s(req.body.ringTimeoutMs)) * 1000) : '',
     pollMs: s(req.body.pollMs) !== '' ? String(Number(s(req.body.pollMs)) * 1000) : '',
     hotlinePrefix: req.body.hotlinePrefix,
@@ -665,6 +679,67 @@ app.post('/account/settings/admin/support', requireRoot, (req, res) => {
     flash(req, 'success', 'Voice-Support-Einstellungen gespeichert.');
   }
   res.redirect('/account/settings');
+});
+
+// Warteschleifenmusik: Song hochladen (dauerhaft in der DB gespeichert).
+app.post('/account/settings/admin/support/hold-music', requireRoot, (req, res) => {
+  audioUpload.single('song')(req, res, (err) => {
+    if (err) {
+      flash(req, 'error', err.message);
+      return res.redirect('/account/settings');
+    }
+    if (!req.file || !req.file.buffer || req.file.buffer.length === 0) {
+      flash(req, 'error', 'Bitte eine Audiodatei auswählen.');
+      return res.redirect('/account/settings');
+    }
+    const name = (req.file.originalname || 'song.mp3').replace(/[\\/:*?"<>|]/g, '_');
+    try {
+      support.addHoldMusic({
+        name,
+        mime: req.file.mimetype || 'audio/mpeg',
+        size: req.file.buffer.length,
+        data: req.file.buffer,
+        userId: req.user.id,
+      });
+      logAccountAction(req.user.id, req.user.id, 'hold_music_added', `Song hinzugefügt: ${name}`);
+      flash(req, 'success', `Song „${name}“ hochgeladen – wird in der Warteschleife zufällig abgespielt.`);
+    } catch (e) {
+      console.error('Hold-Music-Upload fehlgeschlagen:', e);
+      flash(req, 'error', 'Der Song konnte nicht gespeichert werden.');
+    }
+    res.redirect('/account/settings');
+  });
+});
+
+// Warteschleifenmusik: Song löschen.
+app.post('/account/settings/admin/support/hold-music/:id/delete', requireRoot, (req, res) => {
+  const song = support.getHoldMusic(req.params.id);
+  if (song) {
+    support.deleteHoldMusic(song.id);
+    logAccountAction(req.user.id, req.user.id, 'hold_music_removed', `Song entfernt: ${song.name}`);
+    flash(req, 'success', `Song „${song.name}“ gelöscht.`);
+  } else {
+    flash(req, 'error', 'Song nicht gefunden.');
+  }
+  res.redirect('/account/settings');
+});
+
+// Warteschleifenmusik: Metadaten-Liste für den Client (Anrufer-Seite).
+app.get('/api/support/hold-music', requireLogin, (req, res) => {
+  res.json({ ok: true, songs: support.listHoldMusic().map((s) => ({
+    id: s.id, name: s.name, mime: s.mime, size: s.size,
+  })) });
+});
+
+// Warteschleifenmusik: Audiodatei ausliefern.
+app.get('/api/support/hold-music/:id', requireLogin, (req, res) => {
+  const song = support.getHoldMusic(req.params.id);
+  if (!song) return renderError(res, 404, 'Nicht gefunden', 'Der Song existiert nicht (mehr).');
+  const buf = Buffer.from(song.data);
+  res.setHeader('Content-Type', song.mime || 'audio/mpeg');
+  res.setHeader('Content-Length', buf.length);
+  res.setHeader('Cache-Control', 'public, max-age=86400');
+  res.send(buf);
 });
 
 // Systemneustart: Prozess wird beendet (Render startet ihn neu)
@@ -764,11 +839,11 @@ const supportApiLimiter = rateLimit({
 });
 
 app.get('/support', requireLogin, (req, res) => {
-  res.render('support', { title: 'Voice-Support', staff: false, pollMs: support.getSettings().pollMs, announcementIntervalMs: support.getSettings().announcementIntervalMs });
+  res.render('support', { title: 'Voice-Support', staff: false, pollMs: support.getSettings().pollMs });
 });
 
 app.get('/support/staff', requireLogin, requireHR, (req, res) => {
-  res.render('support', { title: 'Voice-Support – Mitarbeiter', staff: true, pollMs: support.getSettings().pollMs, announcementIntervalMs: support.getSettings().announcementIntervalMs });
+  res.render('support', { title: 'Voice-Support – Mitarbeiter', staff: true, pollMs: support.getSettings().pollMs });
 });
 
 // Öffentlicher Status der Hotline (Hotline-Nummer, freie Mitarbeiter).
@@ -2063,8 +2138,9 @@ app.use((req, res) => {
 app.use((err, req, res, next) => {
   console.error(err);
   if (err instanceof multer.MulterError) {
+    const max = err.field === 'song' ? 20 : 5;
     return renderError(res, 400, 'Upload-Fehler',
-      err.code === 'LIMIT_FILE_SIZE' ? 'Die Datei ist zu gross (max. 5 MB).' : 'Upload fehlgeschlagen.');
+      err.code === 'LIMIT_FILE_SIZE' ? `Die Datei ist zu gross (max. ${max} MB).` : 'Upload fehlgeschlagen.');
   }
   renderError(res, 500, 'Fehler', err.message || 'Interner Serverfehler.');
 });

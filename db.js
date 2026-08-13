@@ -163,6 +163,17 @@ db.exec(`
     answer_staff      TEXT
   );
 
+  -- Voice-Support: hochgeladene Warteschleifenmusik (dauerhaft in der DB).
+  CREATE TABLE IF NOT EXISTS hold_music (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    name      TEXT NOT NULL,
+    mime      TEXT NOT NULL,
+    size      INTEGER NOT NULL,
+    data      BLOB NOT NULL,
+    added_by  INTEGER,
+    added_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
   CREATE INDEX IF NOT EXISTS idx_tickets_user ON tickets(user_id);
   CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status);
   CREATE INDEX IF NOT EXISTS idx_messages_ticket ON messages(ticket_id);

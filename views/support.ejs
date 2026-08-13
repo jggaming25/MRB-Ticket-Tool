@@ -55,9 +55,8 @@
         <h2>Sie werden verbunden …</h2>
         <p class="muted" id="queuePositionText"></p>
         <p class="hint" id="waitTimer"></p>
-        <p class="hint">Bitte bleiben Sie in dieser Schleife – Sie hören Warteschleifenmusik und Ansagen, bis ein Mitarbeiter frei ist.</p>
+        <p class="hint">Bitte bleiben Sie in dieser Schleife – Sie hören Warteschleifenmusik, bis ein Mitarbeiter frei ist.</p>
         <div class="support-mic-controls">
-          <button class="btn" id="announceMuteBtn">🔊 Ansagen an</button>
           <button class="btn btn-danger" id="hangupWaitingBtn">Anruf beenden</button>
         </div>
       </div>
@@ -89,7 +88,6 @@
       <ol>
         <li>Klicken Sie auf „Support anrufen“ – Sie landen in der Warteschleife.</li>
         <li>Ihr Browser bittet um Mikrofon-Zugriff und Sie hören Warteschleifenmusik.</li>
-        <li>In regelmäßigen Abständen informiert Sie eine Ansage über Ihre Position und die verfügbaren Mitarbeiter (deutsch und englisch).</li>
         <li>Sie bleiben so lange in der Schleife, bis ein Mitarbeiter frei wird – oder Sie legen selbst auf.</li>
       </ol>
       <p class="hint">Der Anruf läuft über verschlüsselte WebRTC-Verbindung direkt zwischen Ihrem Browser und dem Mitarbeiter.</p>
@@ -99,7 +97,6 @@
   <script>
     window.SUPPORT_STAFF = <%= staff ? 'true' : 'false' %>;
     window.SUPPORT_POLL_MS = <%= pollMs %>;
-    window.SUPPORT_ANNOUNCE_MS = <%= announcementIntervalMs %>;
     window.SUPPORT_PUSH_KEY = <%= pushEnabled ? JSON.stringify(pushPublicKey) : 'null' %>;
     window.SUPPORT_NOTIFY = <%= user && user.notify_changes === 1 ? 'true' : 'false' %>;
   </script>

@@ -832,24 +832,47 @@ function findMail(subjectPart) {
   ok('Support: Staff-State zeigt ausgestempelten HR', st.clockedIn === false);
 
   // Voice-Support-Einstellungen nur für den Inhaber
-  r = await post('/account/settings/admin/support', { announcementIntervalMs: '90', ringTimeoutMs: '30' }, userCookie);
+  r = await post('/account/settings/admin/support', { ringTimeoutMs: '30' }, userCookie);
   ok('Support: Einstellungen fuer normale Nutzer verweigert (403)', r.status === 403);
 
-  r = await post('/account/settings/admin/support', { announcementIntervalMs: '90', ringTimeoutMs: '30', hotlinePrefix: '0900', noStaffMessage: 'Bitte später erneut versuchen.', queueEstimateLabel: 'Wartezeit 2 Minuten.', stunServers: 'stun:stun.l.google.com:19302' }, hrhrCookie);
+  r = await post('/account/settings/admin/support', { ringTimeoutMs: '30', hotlinePrefix: '0900', noStaffMessage: 'Bitte später erneut versuchen.', queueEstimateLabel: 'Wartezeit 2 Minuten.', stunServers: 'stun:stun.l.google.com:19302' }, hrhrCookie);
   ok('Support: Inhaber speichert Einstellungen', r.status === 302);
 
   const savedSupport = JSON.parse(getSetting('support_settings'));
-  ok('Support: Ansage-Intervall gespeichert (90 s -> 90000 ms)', savedSupport.announcementIntervalMs === 90000);
   ok('Support: Klingelzeit gespeichert (30 s -> 30000 ms)', savedSupport.ringTimeoutMs === 30000);
+  ok('Support: kein Ansage-Intervall mehr vorhanden', savedSupport.announcementIntervalMs === undefined);
   ok('Support: Vorwahl gespeichert', savedSupport.hotlinePrefix === '0900');
 
   const newHotline = support.hotlineNumber();
   ok('Support: Hotline-Nummer nach Vorwahl-Wechsel neu erzeugt', newHotline.startsWith('0900'));
 
   // zuruecksetzen auf Standardwerte
-  await post('/account/settings/admin/support', { announcementIntervalMs: '30', ringTimeoutMs: '45', hotlinePrefix: '0800' }, hrhrCookie);
+  await post('/account/settings/admin/support', { ringTimeoutMs: '45', hotlinePrefix: '0800' }, hrhrCookie);
   const reverted = JSON.parse(getSetting('support_settings'));
-  ok('Support: Standardwerte wiederhergestellt', reverted.announcementIntervalMs === 30000 && reverted.ringTimeoutMs === 45000);
+  ok('Support: Standardwerte wiederhergestellt', reverted.ringTimeoutMs === 45000);
+
+  // Warteschleifenmusik: Song hinzufügen, listen, laden und löschen
+  const songId = support.addHoldMusic({ name: 'test-song.mp3', mime: 'audio/mpeg', size: 4, data: Buffer.from([0x1, 0x2, 0x3, 0x4]), userId: 1 });
+  const songList = support.listHoldMusic();
+  ok('Support: Hold-Music-Song ist in der Liste', songList.some((s) => s.id === songId && s.name === 'test-song.mp3' && s.size === 4));
+
+  // API-Listen-Route (nur eingeloggt) liefert den Song
+  r = await get('/api/support/hold-music', userCookie);
+  let hm = JSON.parse(r.body);
+  ok('Support: API liefert Hold-Music-Liste', r.status === 200 && hm.ok === true && hm.songs.some((s) => s.id === songId));
+
+  // API-Auslieferung: Audiodatei als Bytes
+  r = await get(`/api/support/hold-music/${songId}`, userCookie);
+  ok('Support: API liefert Audiodatei aus', r.status === 200 && r.headers.get('content-type') === 'audio/mpeg' && r.body.length === 4);
+
+  // Upload-Route nur für den Inhaber
+  r = await post('/account/settings/admin/support/hold-music', { song: 'x' }, userCookie);
+  ok('Support: Song-Upload fuer normale Nutzer verweigert (403)', r.status === 403);
+
+  const songRow = support.getHoldMusic(songId);
+  ok('Support: Hold-Music-Song wird aus der DB geladen', songRow && songRow.mime === 'audio/mpeg' && Buffer.from(songRow.data).length === 4);
+  support.deleteHoldMusic(songId);
+  ok('Support: Hold-Music-Song gelöscht', support.getHoldMusic(songId) === null && !support.listHoldMusic().some((s) => s.id === songId));
 
   const logoutRes = await fetch(base + '/auth/logout', {
     method: 'POST', headers: { cookie: userCookie }, redirect: 'manual',

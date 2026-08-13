@@ -8,8 +8,8 @@
 // "anrufen" (support_calls): Der Anruf landet in der Warteschleife, wird
 // automatisch einem verfügbaren Mitarbeiter zugewiesen und über WebRTC als
 // Sprachanruf verbunden. Die Warteschleife läuft ohne festes Zeitlimit – der
-// Anrufer bleibt in der Musik (mit KI-Ansagen in DE/EN) bis ein Mitarbeiter
-// frei wird oder er selbst auflegt.
+// Anrufer bleibt so lange in der Musik, bis ein Mitarbeiter frei wird oder er
+// selbst auflegt.
 // ---------------------------------------------------------------------------
 
 const { db, getSetting, setSetting, logAccountAction } = require('./db');
@@ -39,7 +39,6 @@ function getSettings() {
     return {
       ...d,
       ...o,
-      announcementIntervalMs: toPositiveInt(o.announcementIntervalMs, d.announcementIntervalMs, 5000, 600000),
       ringTimeoutMs: toPositiveInt(o.ringTimeoutMs, d.ringTimeoutMs, 5000, 120000),
       pollMs: toPositiveInt(o.pollMs, d.pollMs, 1000, 60000),
       hotlinePrefix: String(o.hotlinePrefix || d.hotlinePrefix).trim(),
@@ -77,10 +76,6 @@ function saveSettings(input) {
   const errors = [];
   const number = (v) => String(v == null ? '' : v).trim();
 
-  const announcementIntervalMs = toPositiveInt(input.announcementIntervalMs, d.announcementIntervalMs, 5000, 600000);
-  if (input.announcementIntervalMs != null && String(input.announcementIntervalMs).trim() !== '' && Number(input.announcementIntervalMs) !== announcementIntervalMs) {
-    errors.push('Ansage-Intervall: zwischen 5 und 600 Sekunden.');
-  }
   const ringTimeoutMs = toPositiveInt(input.ringTimeoutMs, d.ringTimeoutMs, 5000, 120000);
   if (input.ringTimeoutMs != null && String(input.ringTimeoutMs).trim() !== '' && Number(input.ringTimeoutMs) !== ringTimeoutMs) {
     errors.push('Klingel-Zeit: zwischen 5 und 120 Sekunden.');
@@ -100,7 +95,6 @@ function saveSettings(input) {
   const stunServers = stunInput.length ? stunInput : d.stunServers;
 
   const payload = {
-    announcementIntervalMs,
     ringTimeoutMs,
     pollMs,
     hotlinePrefix,
@@ -393,7 +387,6 @@ function publicState(user) {
   return {
     hotline: hotlineNumber(),
     available: availableStaffCount(),
-    announcementIntervalMs: settings.announcementIntervalMs,
     ringTimeoutMs: settings.ringTimeoutMs,
     pollMs: settings.pollMs,
     queueEstimateLabel: settings.queueEstimateLabel,
@@ -421,7 +414,6 @@ function staffState(user) {
     myCall: handled ? { id: handled.id, display: callDisplayNumber(handled.id), status: handled.status, callerName: null } : null,
     queue,
     history: shiftHistory(user.id),
-    announcementIntervalMs: settings.announcementIntervalMs,
     ringTimeoutMs: settings.ringTimeoutMs,
     pollMs: settings.pollMs,
     noStaffMessage: settings.noStaffMessage,
@@ -456,6 +448,34 @@ function runScheduler() {
   assignWaitingCalls();
 }
 
+// ---------------------------------------------------------------------------
+// Warteschleifenmusik (dauerhaft in der DB gespeichert).
+// Der Inhaber kann Songs hochladen; pro Anruf wählt der Client zufällig
+// einen davon aus. Ist keine Datei vorhanden, greift der Client auf die
+// mitgelieferte Standard-Musik (public/audio/hold-music.wav) zurück.
+// ---------------------------------------------------------------------------
+function listHoldMusic() {
+  return db.prepare(`
+    SELECT id, name, mime, size, added_by, added_at FROM hold_music ORDER BY id ASC
+  `).all();
+}
+
+function getHoldMusic(id) {
+  return db.prepare('SELECT * FROM hold_music WHERE id = ?').get(Number(id)) || null;
+}
+
+function addHoldMusic({ name, mime, size, data, userId }) {
+  const info = db.prepare(`
+    INSERT INTO hold_music (name, mime, size, data, added_by)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(String(name || 'Song'), String(mime || 'audio/mpeg'), Number(size) || 0, data, userId || null);
+  return info.lastInsertRowid;
+}
+
+function deleteHoldMusic(id) {
+  db.prepare('DELETE FROM hold_music WHERE id = ?').run(Number(id));
+}
+
 module.exports = {
   getSettings,
   saveSettings,
@@ -477,4 +497,8 @@ module.exports = {
   waitingQueue,
   availableStaffCount,
   runScheduler,
+  listHoldMusic,
+  getHoldMusic,
+  addHoldMusic,
+  deleteHoldMusic,
 };
