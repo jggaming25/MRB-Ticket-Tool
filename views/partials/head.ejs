@@ -17,11 +17,12 @@
       <% if (user) { %>
         <nav class="nav">
           <a class="nav-link <%= currentPath === '/' ? 'active' : '' %>" href="/">Home</a>
+          <a class="nav-link <%= currentPath.startsWith('/dashboard') ? 'active' : '' %>" href="/dashboard">Meine Tickets</a>
+          <a class="nav-link <%= currentPath.startsWith('/tickets/new') ? 'active' : '' %>" href="/tickets/new">Neues Ticket</a>
           <a class="nav-link <%= currentPath.startsWith('/support') ? 'active' : '' %>" href="/support">Voice-Support</a>
           <a class="nav-link <%= currentPath.startsWith('/account/settings') ? 'active' : '' %>" href="/account/settings">Einstellungen</a>
           <% if (isHR) { %>
-            <a class="nav-link <%= currentPath.startsWith('/dashboard') ? 'active' : '' %>" href="/dashboard">Meine Tickets</a>
-            <a class="nav-link <%= currentPath.startsWith('/tickets/new') ? 'active' : '' %>" href="/tickets/new">Neues Ticket</a>
+            <a class="nav-link <%= currentPath === '/support/staff' ? 'active' : '' %>" href="/support/staff">Support-Konsole</a>
             <a class="nav-link <%= currentPath === '/admin' ? 'active' : '' %>" href="/admin">Alle Tickets</a>
             <% if (canStaffLinks) { %>
               <div class="nav-dropdown">
@@ -43,7 +44,7 @@
           <% } %>
         </nav>
         <div class="user-chip">
-          <img class="avatar" src="<%= avatarUrl(user.avatar, user.discord_id) %>" alt="" data-fallback="/static/img/placeholder.svg">
+          <img class="avatar" src="<%= avatarUrl(user.avatar, user.discord_id) %>" alt="" referrerpolicy="no-referrer" data-fallback="/static/img/placeholder.svg">
           <span class="user-name"><%= user.global_name || user.username %>
             <% if (user.role === 'hrhr') { %><span class="badge badge-hrhr">Inhaber</span><% } else if (user.role === 'hr') { %><span class="badge badge-hr">Team</span><% } %>
           </span>
@@ -67,7 +68,7 @@
         <strong>⚠ Meldung:</strong> <%= itAlarm.text %>
       </div>
     <% } %>
-    <% if (lockdown && user && isRoot(user)) { %>
+    <% if (lockdown && user && isRootUser(user)) { %>
       <div class="alarm-banner lockdown">
         <strong>IT-Alarm aktiv – Zugriff gesperrt:</strong> <%= lockdown.message || 'Der Zugriff wurde für alle Bearbeiter gesperrt.' %>
         <em class="alarm-sub">(Nur du kannst dich derzeit einloggen – beenden unter Einstellungen → Admin-Optionen)</em>
@@ -80,7 +81,7 @@
         // und es folgt die Abmeldung zum Login. Auch der Inhaber selbst hört
         // den Alarmton – ohne Vollbild-Overlay und ohne Abmeldung.
         (function () {
-          var isRootUser = <%= user && isRoot(user) ? 'true' : 'false' %>;
+          var isRootUser = <%= user && isRootUser(user) ? 'true' : 'false' %>;
           var shown = false;
           var sirenState = null;
           // Endlos-Sirene (lauter): wechselt 620/880 Hz, bis stopSiren() aufgerufen wird.

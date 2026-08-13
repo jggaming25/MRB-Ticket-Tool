@@ -96,7 +96,7 @@
           <% const isOwnerMsg = m.user_id === ticket.user_id; %>
           <div class="msg <%= m.is_system ? 'msg-system' : (isOwnerMsg ? 'msg-owner' : 'msg-staff') %>" id="msg-<%= m.id %>">
             <% if (!m.is_system) { %>
-              <img class="msg-avatar" src="<%= avatarUrl(m.avatar, m.discord_id) %>" alt="" data-fallback="/static/img/placeholder.svg">
+              <img class="msg-avatar" src="<%= avatarUrl(m.avatar, m.discord_id) %>" alt="" referrerpolicy="no-referrer" data-fallback="/static/img/placeholder.svg">
             <% } %>
             <div class="msg-body">
               <% if (!m.is_system) { %>

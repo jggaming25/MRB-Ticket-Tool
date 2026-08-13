@@ -179,7 +179,8 @@ app.use((req, res, next) => {
   res.locals.config = config;
   res.locals.pushEnabled = push.isConfigured();
   res.locals.pushPublicKey = push.vapidPublicKey;
-  res.locals.isRoot = (u) => isRoot(u);
+  res.locals.isRoot = req.user ? isRoot(req.user) : false;
+  res.locals.isRootUser = (u) => isRoot(u);
   res.locals.isOverdue = isOverdue;
   res.locals.accountStatusLabel = (s) => STATUS_LABELS[s] || s;
   res.locals.logActionLabel = logActionLabel;
@@ -396,9 +397,18 @@ function normalizeLogRows(rows) {
 }
 
 // Discord-Profilbild: animierte Avatare (Hash beginnt mit "a_") brauchen die
-// .gif-Variante, sonst liefert Discord kein Bild. Ohne Avatar/Hash -> Platzhalter.
+// .gif-Variante, sonst liefert Discord kein Bild. Ohne eigenes Profilbild wird
+// der Discord-Standardavatar des Accounts verwendet; ohne discord_id -> Platzhalter.
 function avatarUrl(avatar, discordId) {
-  if (!avatar || !discordId) return '/static/img/placeholder.svg';
+  if (!discordId) return '/static/img/placeholder.svg';
+  if (!avatar) {
+    try {
+      const idx = Number((BigInt(discordId) >> 22n) % 6n);
+      return `https://cdn.discordapp.com/embed/avatars/${idx}.png`;
+    } catch {
+      return '/static/img/placeholder.svg';
+    }
+  }
   const ext = String(avatar).startsWith('a_') ? 'gif' : 'png';
   return `https://cdn.discordapp.com/avatars/${discordId}/${avatar}.${ext}?size=64`;
 }

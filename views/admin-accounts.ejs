@@ -71,7 +71,7 @@
             <tr class="<%= u.id === myId ? 'row-me' : '' %>">
               <td>
                 <div class="user-cell">
-                  <img class="avatar" src="<%= avatarUrl(u.avatar, u.discord_id) %>" data-fallback="/static/img/placeholder.svg">
+                  <img class="avatar" src="<%= avatarUrl(u.avatar, u.discord_id) %>" referrerpolicy="no-referrer" data-fallback="/static/img/placeholder.svg">
                   <div>
                     <strong><a href="/admin/accounts/<%= u.id %>"><%= u.global_name || u.username %></a></strong>
                     <% if (u.id === myId) { %><span class="badge">Du</span><% } %>
