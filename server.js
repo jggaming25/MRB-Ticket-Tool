@@ -742,10 +742,14 @@ app.post('/account/settings/admin/alarm', requireRoot, (req, res) => {
       set_at: new Date().toISOString(),
     }));
     logAccountAction(req.user.id, req.user.id, 'alarm_set', 'Meldung angezeigt.');
+    const who = req.user.global_name || req.user.username;
+    notifyChangesWhatsApp(`📢 Meldung gesetzt von ${who}: ${text.slice(0, 120)}`);
     flash(req, 'success', 'Meldung wird oben auf allen Seiten angezeigt.');
   } else {
     setSetting('it_alarm', '');
     logAccountAction(req.user.id, req.user.id, 'alarm_cleared', 'Meldung entfernt.');
+    const who = req.user.global_name || req.user.username;
+    notifyChangesWhatsApp(`🗑 Meldung entfernt von ${who}`);
     flash(req, 'success', 'Meldung entfernt.');
   }
   res.redirect('/account/settings');
@@ -882,7 +886,9 @@ app.post('/account/settings/admin/support/recordings/:id/delete', requireRoot, (
 
 // Systemneustart: Prozess wird beendet (Render startet ihn neu)
 app.post('/account/settings/admin/restart', requireRoot, (req, res) => {
+  const who = req.user.global_name || req.user.username;
   logAccountAction(req.user.id, req.user.id, 'system_restart', 'Systemneustart angefordert.');
+  notifyChangesWhatsApp(`🔄 Systemneustart angefordert von ${who}`);
   flash(req, 'success', 'System wird neu gestartet …');
   res.redirect('/account/settings');
   setTimeout(() => {
@@ -897,6 +903,8 @@ app.post('/account/settings/admin/backups/create', requireRoot, (req, res) => {
   if (!result.ok) {
     flash(req, 'error', `Backup nicht möglich: 0 / ${backups.maxSlots()} Slots frei. Erst aufräumen (jlg09) oder alte Backups löschen.`);
   } else {
+    const who = req.user.global_name || req.user.username;
+    notifyChangesWhatsApp(`💾 Backup erstellt von ${who} (${backups.slotsFree()} / ${backups.maxSlots()} Slots frei)`);
     flash(req, 'success', `Backup erstellt (${backups.slotsFree()} / ${backups.maxSlots()} Slots frei).`);
   }
   res.redirect('/account/settings');
@@ -905,6 +913,8 @@ app.post('/account/settings/admin/backups/create', requireRoot, (req, res) => {
 // Einzelnes Backup löschen
 app.post('/account/settings/admin/backups/:id/delete', requireRoot, (req, res) => {
   backups.deleteBackup(req.params.id);
+  const who = req.user.global_name || req.user.username;
+  notifyChangesWhatsApp(`🗑 Backup gelöscht von ${who}`);
   flash(req, 'success', 'Backup gelöscht.');
   res.redirect('/account/settings');
 });
@@ -912,7 +922,9 @@ app.post('/account/settings/admin/backups/:id/delete', requireRoot, (req, res) =
 // Alle Backups löschen (jlg09 kann jederzeit aufräumen)
 app.post('/account/settings/admin/backups/clear', requireRoot, (req, res) => {
   backups.clearAllBackups();
+  const who = req.user.global_name || req.user.username;
   logAccountAction(req.user.id, req.user.id, 'backups_cleared', 'Alle Backups manuell gelöscht.');
+  notifyChangesWhatsApp(`⚠️ ALLE Backups gelöscht von ${who}`);
   flash(req, 'success', `Alle Backups gelöscht. ${backups.maxSlots()} / ${backups.maxSlots()} Slots wieder frei.`);
   res.redirect('/account/settings');
 });
@@ -1481,6 +1493,8 @@ app.post('/tickets/:id/close', requireHRHR, loadTicketFor, async (req, res) => {
   const transcript = generateTicketTranscript(ticket.id);
   if (transcript) saveTicketTranscript(ticket.id, transcript);
 
+  const who = req.user.global_name || req.user.username;
+  notifyChangesWhatsApp(`🔒 Ticket #${String(ticket.number).padStart(4, '0')} geschlossen von ${who}${released ? '' : ' (ohne Freigabe, bestätigt)'}`);
   await notifyCustomer(ticket, ticket.subject, 'Dein Ticket wurde erfolgreich abgeschlossen.');
   flash(req, 'success', 'Ticket geschlossen.');
   res.redirect(ticketViewUrl(ticket, adminCtx));
@@ -1510,6 +1524,8 @@ app.post('/tickets/:id/reopen', requireHRHR, loadTicketFor, async (req, res) => 
 
   logTicketAction(req.ticket.id, req.user.id, 'reopened', 'Ticket wieder geöffnet');
   insertSystemMessage(req.ticket.id, 'Das Ticket wurde wieder geoeffnet.');
+  const who = req.user.global_name || req.user.username;
+  notifyChangesWhatsApp(`🔓 Ticket #${String(req.ticket.number).padStart(4, '0')} wieder geöffnet von ${who}`);
   await notifyCustomer(req.ticket, req.ticket.subject, 'Dein Ticket wurde wieder geöffnet.');
   flash(req, 'success', 'Ticket wieder geöffnet.');
   res.redirect(ticketViewUrl(req.ticket, adminCtx));
@@ -1639,6 +1655,8 @@ app.post('/admin/tickets/:id/status', requireHR, (req, res) => {
 
   logTicketAction(ticket.id, req.user.id, 'status', `Status → ${statusLabel(status)}`);
   insertSystemMessage(ticket.id, `Status geaendert auf "${statusLabel(status).toLowerCase()}" von ${req.user.global_name || req.user.username}.`);
+  const who = req.user.global_name || req.user.username;
+  notifyChangesWhatsApp(`📋 Ticket #${String(ticket.number).padStart(4, '0')}: Status → ${statusLabel(status)} (von ${who})`);
   res.redirect(req.get('Referer') || ticketViewUrl(ticket, true));
 });
 
@@ -1692,6 +1710,7 @@ app.post('/admin/tickets/:id/unclaim', requireHR, (req, res) => {
   const who = req.user.global_name || req.user.username;
   logTicketAction(ticket.id, req.user.id, 'unclaimed', `Übernahme von ${who} freigegeben`);
   insertSystemMessage(ticket.id, `Uebernahme von ${who} freigegeben. Das Ticket ist wieder frei.`);
+  notifyChangesWhatsApp(`🤝 Ticket #${String(ticket.number).padStart(4, '0')}: Übernahme freigegeben von ${who} (Ticket wieder frei)`);
   flash(req, 'success', 'Übernahme freigegeben. Andere Bearbeiter können das Ticket jetzt übernehmen.');
   res.redirect(ticketViewUrl(ticket, true));
 });
@@ -1775,6 +1794,7 @@ app.post('/admin/tickets/:id/transfer', requireHR, loadTicketFor, async (req, re
     `Übergeben an ${target.global_name || target.username}${reason ? ` – Begründung: ${reason}` : ''}`);
   insertSystemMessage(ticket.id,
     `Ticket von ${fromName} an ${target.global_name || target.username} übergeben.${reason ? ` Begründung: ${reason}` : ''}`);
+  notifyChangesWhatsApp(`📤 Ticket #${String(ticket.number).padStart(4, '0')} übergeben von ${fromName} an ${target.global_name || target.username}${reason ? ` – ${reason}` : ''}`);
 
   // E-Mail an den neuen Bearbeiter + Kunden-Info (fire-and-forget)
   if (target.email) {
@@ -1874,6 +1894,8 @@ app.post('/admin/tickets/:id/due', requireHR, loadTicketFor, async (req, res) =>
   insertSystemMessage(ticket.id,
     `Fälligkeit festgelegt auf ${new Date(due).toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Europe/Berlin' })}.` +
     (nextAction ? ` Nächste Aktion: ${nextAction}.` : ''));
+  const who = req.user.global_name || req.user.username;
+  notifyChangesWhatsApp(`📅 Ticket #${String(ticket.number).padStart(4, '0')}: Fälligkeit gesetzt von ${who} auf ${new Date(due).toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Europe/Berlin' })}${nextAction ? ` (Nächste Aktion: ${nextAction})` : ''}`);
   flash(req, 'success', 'Fälligkeit und nächste Aktion gespeichert.');
   res.redirect(ticketViewUrl(ticket, true));
 });
@@ -2053,8 +2075,10 @@ app.post('/admin/accounts/:id/disable', requireRoot, (req, res) => {
   `).run(reason, req.user.id, disableUntil, target.id);
 
   if (target.email) mailer.sendAccountDisabled(target.email, reason);
+  const who = req.user.global_name || req.user.username;
   logAccountAction(target.id, req.user.id, 'disabled',
     `${reason}${disableUntil ? ` (automatische Freigabe: ${new Date(disableUntil).toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Europe/Berlin' })})` : ' (nur manuelle Freigabe)'}`);
+  notifyChangesWhatsApp(`⛔ Konto von ${target.username} deaktiviert von ${who}: ${reason}${disableUntil ? ` (Freigabe: ${new Date(disableUntil).toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Europe/Berlin' })})` : ''}`);
 
   flash(req, 'success', `Konto von ${target.username} deaktiviert. E-Mail wurde benachrichtigt.`);
   res.redirect('/admin/accounts');
@@ -2087,6 +2111,7 @@ app.post('/admin/accounts/:id/delete', requireRoot, (req, res) => {
   }
   const deleteAt = when.toISOString();
   const now = new Date();
+  const who = req.user.global_name || req.user.username;
 
   if (when <= now) {
     // Sofort loeschen
@@ -2097,6 +2122,7 @@ app.post('/admin/accounts/:id/delete', requireRoot, (req, res) => {
     `).run(reason, req.user.id, target.id);
     if (target.email) mailer.sendAccountDeleted(target.email, reason);
     logAccountAction(target.id, req.user.id, 'deleted', reason);
+    notifyChangesWhatsApp(`❌ Konto von ${target.username} gelöscht von ${who}: ${reason}`);
     flash(req, 'success', `Konto von ${target.username} geloescht. E-Mail wurde benachrichtigt.`);
   } else {
     // Geplante Loeschung: erst zum angegebenen Zeitpunkt
@@ -2104,9 +2130,11 @@ app.post('/admin/accounts/:id/delete', requireRoot, (req, res) => {
       UPDATE users SET delete_at = ?, disabled_reason = ?, updated_at = datetime('now')
       WHERE id = ?
     `).run(deleteAt, reason, target.id);
+    const delStr = new Date(deleteAt).toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Europe/Berlin' });
     logAccountAction(target.id, req.user.id, 'delete_scheduled',
-      `${reason} (geplante Löschung: ${new Date(deleteAt).toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Europe/Berlin' })})`);
-    flash(req, 'success', `Löschung von ${target.username} für ${new Date(deleteAt).toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Europe/Berlin' })} geplant.`);
+      `${reason} (geplante Löschung: ${delStr})`);
+    notifyChangesWhatsApp(`⏳ Löschung von ${target.username} geplant von ${who} (${delStr}): ${reason}`);
+    flash(req, 'success', `Löschung von ${target.username} für ${delStr} geplant.`);
   }
   res.redirect('/admin/accounts');
 });
@@ -2123,7 +2151,9 @@ app.post('/admin/accounts/:id/enable', requireRoot, async (req, res) => {
   `).run(target.id);
 
   if (target.email) mailer.sendAccountReactivated(target.email, reason);
+  const who = req.user.global_name || req.user.username;
   logAccountAction(target.id, req.user.id, 'enabled', reason || 'Reaktiviert');
+  notifyChangesWhatsApp(`✅ Konto von ${target.username} reaktiviert von ${who}${reason ? `: ${reason}` : ''}`);
 
   flash(req, 'success', `Konto von ${target.username} reaktiviert. E-Mail wurde benachrichtigt.`);
   res.redirect('/admin/accounts');
@@ -2157,7 +2187,9 @@ app.post('/admin/accounts/:id/role', requireRoot, async (req, res) => {
   const oldRole = target.role;
   db.prepare("UPDATE users SET role = ?, is_root = CASE WHEN ? = 'hrhr' AND is_root = 0 THEN 1 ELSE is_root END, updated_at = datetime('now') WHERE id = ?")
     .run(role, role, target.id);
+  const who = req.user.global_name || req.user.username;
   logAccountAction(target.id, req.user.id, 'role_changed', `Rolle: ${ROLE_LABELS[oldRole] || oldRole} → ${ROLE_LABELS[role] || role}`);
+  notifyChangesWhatsApp(`🎭 Rolle von ${target.username} geändert von ${who}: ${ROLE_LABELS[oldRole] || oldRole} → ${ROLE_LABELS[role] || role}`);
 
   flash(req, 'success', `Rolle von ${target.username} auf "${ROLE_LABELS[role]}" geändert.`);
   res.redirect('/admin/accounts');
@@ -2207,7 +2239,9 @@ app.post('/admin/accounts/:id/note', requireHR, (req, res) => {
     return res.redirect(`/admin/accounts/${target.id}`);
   }
   addAccountNote(target.id, req.user.id, note);
+  const who = req.user.global_name || req.user.username;
   logAccountAction(target.id, req.user.id, 'note_added', 'Notiz hinzugefügt');
+  notifyChangesWhatsApp(`📝 Notiz zu ${target.username} von ${who}: ${note.slice(0, 120)}`);
   flash(req, 'success', 'Notiz gespeichert.');
   res.redirect(`/admin/accounts/${target.id}`);
 });
@@ -2262,6 +2296,7 @@ function runAccountScheduler() {
     `).run(now, u.id);
     logAccountAction(u.id, null, 'enabled_auto', 'Automatische Reaktivierung nach festgelegter Zeit');
     if (u.email) mailer.sendAccountReactivated(u.email, 'Automatische Reaktivierung nach festgelegter Zeit');
+    notifyChangesWhatsApp(`✅ Konto von ${u.username} automatisch reaktiviert (geplante Freigabe)`);
   }
   const toDelete = db.prepare(`
     SELECT * FROM users WHERE delete_at IS NOT NULL AND delete_at <= ?
@@ -2275,6 +2310,7 @@ function runAccountScheduler() {
     `).run(now, now, u.id);
     logAccountAction(u.id, null, 'deleted_auto', 'Automatische Löschung nach festgelegter Zeit');
     if (u.email) mailer.sendAccountDeleted(u.email, 'Ihr Konto wurde nach festgelegter Zeit gelöscht.');
+    notifyChangesWhatsApp(`❌ Konto von ${u.username} automatisch gelöscht (geplante Löschung)`);
   }
 }
 
