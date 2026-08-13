@@ -136,6 +136,26 @@ module.exports = {
     monthlyCleanupDays: 30,
   },
 
+  // ---------------------------------------------------------------------------
+  // Voice-Support / Support-Hotline
+  // ---------------------------------------------------------------------------
+  // HR/Inhaber können sich für den Voice-Support ein- und ausstempeln. Eingeloggte
+  // Nutzer können die Hotline "anrufen" (über die Website, mit Warteschleife und
+  // WebRTC-Sprachanruf). Die Hotline-Nummer wird automatisch aus den vorhandenen
+  // Datenwerten (Tickets, Nutzer, Bearbeiter) abgeleitet.
+  // ---------------------------------------------------------------------------
+  support: {
+    hotlinePrefix: '0800',       // Vorwahl der Support-Hotline
+    waitMaxMs: 2 * 60 * 1000,    // max. Wartezeit in der Warteschleife, bis "kein Mitarbeiter verfügbar"
+    ringTimeoutMs: 45 * 1000,    // Zeit, die ein zugewiesener Mitarbeiter zum Annehmen hat
+    pollMs: 3000,                // Polling-Intervall der Clients (Server-Zustand)
+    stunServers: ['stun:stun.l.google.com:19302'],
+    noStaffMessage:
+      'Derzeit ist leider kein Mitarbeiter für den Voice-Support verfügbar. ' +
+      'Bitte versuchen Sie es später noch einmal.',
+    queueEstimateLabel: 'Ihre voraussichtliche Wartezeit beträgt 1–2 Minuten.',
+  },
+
   // Meldung, die bei gesperrtem Zugriff (Lockdown) auf der Login-Seite
   // und im Einstellungs-Bereich angezeigt wird.
   lockdownMessage: 'Der Zugriff auf das System wurde gerade für alle Bearbeiter gesperrt.',

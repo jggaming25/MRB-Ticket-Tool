@@ -71,7 +71,7 @@ global.fetch = async (url, opts = {}) => {
 
 // /auth/discord erzeugt zufaelligen State
 const { app, sessionStore } = require('./server');
-const { db, migrateLogActions, logActionLabel } = require('./db');
+const { db, getSetting, migrateLogActions, logActionLabel } = require('./db');
 const config = require('./config');
 const pushModule = require('./push');
 
@@ -746,6 +746,105 @@ function findMail(subjectPart) {
   const daysUntil = expires ? (new Date(expires[1]).getTime() - Date.now()) / (24 * 3600 * 1000) : null;
   const ok14d = maxAge ? Number(maxAge[1]) === 14 * 24 * 60 * 60 : (daysUntil !== null && daysUntil >= 13 && daysUntil <= 15);
   ok('Session-Cookie: 14 Tage Laufzeit', ok14d, maxAge ? `Max-Age=${maxAge[1]}` : expires ? `Expires in ${daysUntil.toFixed(1)} Tagen` : 'kein Ablaufdatum');
+
+  // ==================================================================
+  // 9) Voice-Support / Support-Hotline
+  // ==================================================================
+  r = await get('/support', userCookie);
+  ok('Support: Anrufer-Seite erreichbar, Hotline + Anruf-Button', r.status === 200 && r.body.includes('Voice-Support') && r.body.includes('support.js'));
+
+  r = await get('/support/staff', userCookie);
+  ok('Support: Mitarbeiter-Konsole fuer normale Nutzer verweigert (403)', r.status === 403);
+
+  // Der HR-Account (max.mustermann) wurde weiter oben im Test geloescht ->
+  // fuer den Support-Test wieder aktivieren und mit frischer Session nutzen.
+  r = await post(`/admin/accounts/${hrUser.id}/enable`, { reason: 'Fuer den Support-Test' }, hrhrCookie);
+  ok('Support: HR-Account fuer den Test reaktiviert', r.status === 302);
+  hrCookie = await cookieFor(hrUser.id);
+
+  r = await get('/support/staff', hrCookie);
+  ok('Support: Mitarbeiter-Konsole fuer Team erreichbar', r.status === 200 && r.body.includes('Mitarbeiter-Konsole'));
+
+  r = await postJson('/api/support/clockin', {}, hrCookie);
+  ok('Support: HR stempelt sich ein', JSON.parse(r.body).ok === true);
+
+  r = await get('/api/support/state', userCookie);
+  let st = JSON.parse(r.body);
+  ok('Support: Hotline-Nummer wird angezeigt', typeof st.hotline === 'string' && st.hotline.startsWith('0800'));
+  ok('Support: mind. ein Mitarbeiter verfuegbar', st.available >= 1);
+
+  r = await get('/api/support/staff/state', hrCookie);
+  st = JSON.parse(r.body);
+  ok('Support: Staff-State zeigt eingestempelten HR', st.clockedIn === true);
+
+  r = await postJson('/api/support/call/start', {}, userCookie);
+  const callRes = JSON.parse(r.body);
+  ok('Support: Anrufer startet Anruf', callRes.ok === true && callRes.call && callRes.call.id > 0);
+  const callId = callRes.call ? callRes.call.id : 0;
+
+  r = await get(`/api/support/call/${callId}`, userCookie);
+  st = JSON.parse(r.body);
+  ok('Support: Anruf dem eingestempelten HR zugewiesen (ringing)', st.ok === true && st.call && st.call.status === 'ringing' && st.call.role === 'caller');
+
+  r = await get(`/api/support/call/${callId}`, lockUser);
+  st = JSON.parse(r.body);
+  ok('Support: Fremder Nutzer hat keinen Zugriff auf den Anruf (403)', st.ok === false && st.reason === 'forbidden');
+
+  // WebRTC-Signalisierung: Anrufer sendet Offer, HR sendet Answer -> active
+  r = await postJson('/api/support/call/signal', { callId, role: 'offer', sdp: 'v=0\r\no=caller' }, userCookie);
+  ok('Support: Offer des Anrufers gespeichert', JSON.parse(r.body).ok === true);
+
+  r = await postJson('/api/support/call/signal', { callId, role: 'answer', sdp: 'v=0\r\no=staff' }, hrCookie);
+  ok('Support: Answer des HR gespeichert', JSON.parse(r.body).ok === true);
+
+  r = await get(`/api/support/call/${callId}`, hrCookie);
+  st = JSON.parse(r.body);
+  ok('Support: Anruf nach Answer aktiv (beide Seiten), Staff sieht Offer', st.ok === true && st.call.status === 'active' && st.call.role === 'staff' && st.call.offer === 'v=0\r\no=caller');
+
+  r = await get(`/api/support/call/${callId}`, userCookie);
+  st = JSON.parse(r.body);
+  ok('Support: Anrufer sieht Answer', st.ok === true && st.call.answer === 'v=0\r\no=staff');
+
+  // Kein Mitarbeiter verfuegbar -> nach fester Wartezeit endet der Anruf.
+  const secondCall = await postJson('/api/support/call/start', {}, lockUser);
+  const s2 = JSON.parse(secondCall.body);
+  ok('Support: zweiter Anrufer (kein freier HR) landet in Warteschlange', s2.ok === true && s2.call && s2.call.status === 'waiting');
+  db.prepare('UPDATE support_calls SET joined_at = ? WHERE id = ?').run(new Date(Date.now() - 5 * 60 * 1000).toISOString(), s2.call.id);
+  const support = require('./support');
+  support.runScheduler();
+  const s2after = db.prepare('SELECT * FROM support_calls WHERE id = ?').get(s2.call.id);
+  ok('Support: ohne freien Mitarbeiter endet Warteschlange nach fester Wartezeit (timeout)', s2after.status === 'timeout');
+
+  // Anruf beenden (Anrufer)
+  r = await postJson('/api/support/call/end', { callId }, userCookie);
+  ok('Support: Anrufer beendet Anruf', JSON.parse(r.body).ok === true);
+
+  r = await postJson('/api/support/clockout', {}, hrCookie);
+  ok('Support: HR stempelt sich aus', JSON.parse(r.body).ok === true);
+
+  r = await get('/api/support/staff/state', hrCookie);
+  st = JSON.parse(r.body);
+  ok('Support: Staff-State zeigt ausgestempelten HR', st.clockedIn === false);
+
+  // Voice-Support-Einstellungen nur für den Inhaber
+  r = await post('/account/settings/admin/support', { waitMaxMs: '90', ringTimeoutMs: '30' }, userCookie);
+  ok('Support: Einstellungen fuer normale Nutzer verweigert (403)', r.status === 403);
+
+  r = await post('/account/settings/admin/support', { waitMaxMs: '90', ringTimeoutMs: '30', hotlinePrefix: '0900', noStaffMessage: 'Bitte später erneut versuchen.', queueEstimateLabel: 'Wartezeit 2 Minuten.', stunServers: 'stun:stun.l.google.com:19302' }, hrhrCookie);
+  ok('Support: Inhaber speichert Einstellungen', r.status === 302);
+
+  const savedSupport = JSON.parse(getSetting('support_settings'));
+  ok('Support: Wartezeit gespeichert (90 s -> 90000 ms)', savedSupport.waitMaxMs === 90000);
+  ok('Support: Klingelzeit gespeichert (30 s -> 30000 ms)', savedSupport.ringTimeoutMs === 30000);
+  ok('Support: Vorwahl gespeichert', savedSupport.hotlinePrefix === '0900');
+
+  const newHotline = support.hotlineNumber();
+  ok('Support: Hotline-Nummer nach Vorwahl-Wechsel neu erzeugt', newHotline.startsWith('0900'));
+
+  // zuruecksetzen auf Standardwerte
+  await post('/account/settings/admin/support', { waitMaxMs: '120', ringTimeoutMs: '45', hotlinePrefix: '0800' }, hrhrCookie);
+  const reverted = JSON.parse(getSetting('support_settings'));
+  ok('Support: Standardwerte wiederhergestellt', reverted.waitMaxMs === 120000 && reverted.ringTimeoutMs === 45000);
 
   const logoutRes = await fetch(base + '/auth/logout', {
     method: 'POST', headers: { cookie: userCookie }, redirect: 'manual',

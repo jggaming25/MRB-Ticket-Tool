@@ -17,9 +17,10 @@
       <% if (user) { %>
         <nav class="nav">
           <a class="nav-link <%= currentPath === '/' ? 'active' : '' %>" href="/">Home</a>
+          <a class="nav-link <%= currentPath.startsWith('/support') ? 'active' : '' %>" href="/support">Voice-Support</a>
           <a class="nav-link <%= currentPath.startsWith('/account/settings') ? 'active' : '' %>" href="/account/settings">Einstellungen</a>
           <% if (isHR) { %>
-            <a class="nav-link <%= currentPath === '/dashboard' ? 'active' : '' %>" href="/dashboard">Meine Tickets</a>
+            <a class="nav-link <%= currentPath.startsWith('/dashboard') ? 'active' : '' %>" href="/dashboard">Meine Tickets</a>
             <a class="nav-link <%= currentPath.startsWith('/tickets/new') ? 'active' : '' %>" href="/tickets/new">Neues Ticket</a>
             <a class="nav-link <%= currentPath === '/admin' ? 'active' : '' %>" href="/admin">Alle Tickets</a>
             <% if (canStaffLinks) { %>

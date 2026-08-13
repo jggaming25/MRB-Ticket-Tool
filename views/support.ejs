@@ -1,0 +1,104 @@
+<%- include('partials/head', { title, user, isHR, isHRHR, currentPath }) %>
+
+  <% if (staff) { %>
+    <h1 class="page-title">Voice-Support – Mitarbeiter-Konsole</h1>
+    <p class="muted">Stempel dich ein, um für den Voice-Support verfügbar zu sein. Wartende Anrufer werden dir automatisch zugewiesen.</p>
+
+    <div class="support-grid">
+      <div class="card support-panel" id="staffPanel">
+        <h2>Schicht</h2>
+        <div class="staff-shift-row">
+          <div>
+            <div class="staff-status-dot" id="shiftDot"></div>
+            <span id="shiftStatus" class="staff-status-text">Lade …</span>
+          </div>
+          <button class="btn btn-primary" id="shiftBtn">Einstempeln</button>
+        </div>
+        <p class="muted" id="shiftSince"></p>
+        <p class="muted" id="staffAvailability">Freie Mitarbeiter: –</p>
+        <p class="muted" id="staffHotline">Support-Nummer: –</p>
+      </div>
+
+      <div class="card support-panel" id="myCallPanel">
+        <h2>Mein Anruf</h2>
+        <div id="myCallContent">
+          <p class="muted">Kein aktiver Anruf.</p>
+        </div>
+      </div>
+
+      <div class="card support-panel">
+        <h2>Warteschlange</h2>
+        <div id="queueList">
+          <p class="muted">Keine wartenden Anrufer.</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="card" id="callHistoryCard">
+      <h2>Deine letzten Schichten</h2>
+      <div id="shiftHistory"></div>
+    </div>
+  <% } else { %>
+    <h1 class="page-title">Voice-Support</h1>
+    <p class="muted">Unser Team ist per Sprachanruf über die Website erreichbar – ganz ohne Telefonnummer, direkt hier.</p>
+
+    <div class="support-call-card card" id="callCard">
+      <div class="support-hero" id="supportIdle">
+        <div class="support-number-badge" id="hotlineNumber">–</div>
+        <p class="muted" id="availabilityText">Verfügbarkeit wird geladen …</p>
+        <button class="btn btn-primary btn-lg" id="startCallBtn">📞 Support anrufen</button>
+        <p class="hint"><%= config.support.queueEstimateLabel %></p>
+      </div>
+
+      <div class="support-hero hidden" id="supportWaiting">
+        <div class="waiting-pulse"></div>
+        <h2>Sie werden verbunden …</h2>
+        <p class="muted" id="queuePositionText"></p>
+        <p class="hint" id="waitTimer"></p>
+        <p class="hint">Bitte bleiben Sie in dieser Schleife – Sie hören gleich Warteschleifenmusik.</p>
+        <button class="btn btn-danger" id="hangupWaitingBtn">Anruf beenden</button>
+      </div>
+
+      <div class="support-hero hidden" id="supportConnecting">
+        <h2>Der Anruf wird hergestellt …</h2>
+        <p class="muted">Ihr Mitarbeiter nimmt gleich ab.</p>
+        <button class="btn btn-danger" id="hangupConnectingBtn">Auflegen</button>
+      </div>
+
+      <div class="support-hero hidden" id="supportActive">
+        <h2 class="support-in-call">📞 Verbunden mit <span id="activeStaffName"></span></h2>
+        <p class="muted">Sie sind jetzt im Gespräch. Bitte sprechen Sie in Ihr Mikrofon.</p>
+        <div class="support-mic-controls">
+          <button class="btn" id="muteBtn">🔇 Mikrofon stumm</button>
+          <button class="btn btn-danger" id="hangupActiveBtn">Anruf beenden</button>
+        </div>
+      </div>
+
+      <div class="support-hero hidden" id="supportEnded">
+        <h2 id="endedTitle"></h2>
+        <p class="muted" id="endedText"></p>
+        <button class="btn btn-primary" id="callAgainBtn">Erneut versuchen</button>
+      </div>
+    </div>
+
+    <div class="card" id="supportInfo">
+      <h2>So funktioniert's</h2>
+      <ol>
+        <li>Klicken Sie auf „Support anrufen“ – Sie landen in der Warteschleife.</li>
+        <li>Ihr Browser bittet um Mikrofon-Zugriff und Sie hören Warteschleifenmusik.</li>
+        <li>Sobald ein Mitarbeiter verfügbar ist, werden Sie automatisch verbunden.</li>
+        <li>Ist aktuell niemand eingestempelt, erhalten Sie nach kurzer Wartezeit einen Hinweis und können es später erneut versuchen.</li>
+      </ol>
+      <p class="hint">Der Anruf läuft über verschlüsselte WebRTC-Verbindung direkt zwischen Ihrem Browser und dem Mitarbeiter.</p>
+    </div>
+  <% } %>
+
+  <script>
+    window.SUPPORT_STAFF = <%= staff ? 'true' : 'false' %>;
+    window.SUPPORT_POLL_MS = <%= pollMs %>;
+    window.SUPPORT_PUSH_KEY = <%= pushEnabled ? JSON.stringify(pushPublicKey) : 'null' %>;
+    window.SUPPORT_NOTIFY = <%= user && user.notify_changes === 1 ? 'true' : 'false' %>;
+  </script>
+  <script src="/static/js/support.js?v=<%= assetVersion %>"></script>
+
+<%- include('partials/footer') %>

@@ -17,6 +17,7 @@ const mailer = require('./mailer');
 const config = require('./config');
 const push = require('./push');
 const backups = require('./backups');
+const support = require('./support');
 const {
   loadUser,
   requireLogin,
@@ -565,6 +566,7 @@ app.get('/account/settings', requireLogin, (req, res) => {
       backups: backups.listBackups(),
       backupSlotsFree: backups.slotsFree(),
       backupMax: backups.maxSlots(),
+      support: { ...support.getSettings(), hotline: support.hotlineNumber() },
     } : null,
   });
 });
@@ -626,6 +628,28 @@ app.post('/account/settings/admin/alarm', requireRoot, (req, res) => {
     setSetting('it_alarm', '');
     logAccountAction(req.user.id, req.user.id, 'alarm_cleared', 'Meldung entfernt.');
     flash(req, 'success', 'Meldung entfernt.');
+  }
+  res.redirect('/account/settings');
+});
+
+// Voice-Support: Einstellungen (Wartezeiten, Hotline-Vorwahl, Texte) speichern
+app.post('/account/settings/admin/support', requireRoot, (req, res) => {
+  const s = (v) => { const n = Number(v); return Number.isFinite(n) ? String(Math.round(n)) : ''; };
+  const result = support.saveSettings({
+    // UI-Eingabe in Sekunden, Speicherung intern in Millisekunden
+    waitMaxMs: s(req.body.waitMaxMs) !== '' ? String(Number(s(req.body.waitMaxMs)) * 1000) : '',
+    ringTimeoutMs: s(req.body.ringTimeoutMs) !== '' ? String(Number(s(req.body.ringTimeoutMs)) * 1000) : '',
+    pollMs: s(req.body.pollMs) !== '' ? String(Number(s(req.body.pollMs)) * 1000) : '',
+    hotlinePrefix: req.body.hotlinePrefix,
+    noStaffMessage: req.body.noStaffMessage,
+    queueEstimateLabel: req.body.queueEstimateLabel,
+    stunServers: req.body.stunServers ? String(req.body.stunServers).split(',').map((s) => s.trim()) : [],
+  });
+  if (result.errors.length) {
+    flash(req, 'error', `Einstellungen nicht gespeichert: ${result.errors.join(' ')}`);
+  } else {
+    logAccountAction(req.user.id, req.user.id, 'support_settings', 'Voice-Support-Einstellungen angepasst.');
+    flash(req, 'success', 'Voice-Support-Einstellungen gespeichert.');
   }
   res.redirect('/account/settings');
 });
@@ -714,6 +738,91 @@ app.post('/api/push/unsubscribe', requireLogin, (req, res) => {
   const { endpoint } = req.body || {};
   push.removeSubscription(endpoint);
   res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
+// Voice-Support / Support-Hotline
+// ---------------------------------------------------------------------------
+const supportApiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+app.get('/support', requireLogin, (req, res) => {
+  res.render('support', { title: 'Voice-Support', staff: false, pollMs: support.getSettings().pollMs });
+});
+
+app.get('/support/staff', requireLogin, requireHR, (req, res) => {
+  res.render('support', { title: 'Voice-Support – Mitarbeiter', staff: true, pollMs: support.getSettings().pollMs });
+});
+
+// Öffentlicher Status der Hotline (Hotline-Nummer, freie Mitarbeiter).
+app.get('/api/support/state', requireLogin, supportApiLimiter, (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json(support.publicState(req.user));
+});
+
+// Ein-/Ausstempeln für HR/Inhaber.
+app.post('/api/support/clockin', requireLogin, requireHR, (req, res) => {
+  const result = support.clockIn(req.user.id);
+  res.json(result);
+});
+
+app.post('/api/support/clockout', requireLogin, requireHR, (req, res) => {
+  const result = support.clockOut(req.user.id);
+  res.json(result);
+});
+
+// Zustand für die Mitarbeiter-Konsole (Schicht, Warteschlange, eigener Anruf).
+app.get('/api/support/staff/state', requireLogin, requireHR, (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json(support.staffState(req.user));
+});
+
+// Anruf starten (legt ggf. Warteschlangen-Eintrag an / weist zu).
+app.post('/api/support/call/start', requireLogin, supportApiLimiter, (req, res) => {
+  res.json(support.startCall(req.user.id));
+});
+
+// Anruf annehmen (zugewiesen oder aus der Warteschlange).
+app.post('/api/support/call/accept', requireLogin, requireHR, (req, res) => {
+  const callId = Number((req.body || {}).callId);
+  if (!Number.isInteger(callId) || callId <= 0) {
+    return res.status(400).json({ ok: false, reason: 'invalid' });
+  }
+  res.json(support.acceptCall(req.user.id, callId));
+});
+
+// Anruf beenden (Anrufer oder zugewiesener Mitarbeiter).
+app.post('/api/support/call/end', requireLogin, (req, res) => {
+  const callId = Number((req.body || {}).callId);
+  if (!Number.isInteger(callId) || callId <= 0) {
+    return res.status(400).json({ ok: false, reason: 'invalid' });
+  }
+  res.json(support.endCall(req.user.id, callId));
+});
+
+// WebRTC-Signal austauschen (SDP).
+app.post('/api/support/call/signal', requireLogin, (req, res) => {
+  const { callId, role, sdp } = req.body || {};
+  const id = Number(callId);
+  if (!Number.isInteger(id) || id <= 0 || !['offer', 'answer'].includes(role)) {
+    return res.status(400).json({ ok: false, reason: 'invalid' });
+  }
+  res.json(support.setSignal(req.user.id, id, role, sdp));
+});
+
+// Zustand eines Anrufs abrufen (Polling für WebRTC-Signalisierung).
+app.get('/api/support/call/:id', requireLogin, supportApiLimiter, (req, res) => {
+  const callId = Number(req.params.id);
+  if (!Number.isInteger(callId) || callId <= 0) {
+    return res.status(400).json({ ok: false, reason: 'invalid' });
+  }
+  const result = support.callStateFor(req.user.id, callId);
+  const code = result.ok ? 200 : (result.reason === 'notfound' ? 404 : 403);
+  res.status(code).json(result);
 });
 
 // ---------------------------------------------------------------------------
@@ -1960,6 +2069,8 @@ if (require.main === module) {
   // Account-Scheduler: automatische Freigaben/Löschungen alle 60 Sekunden
   runAccountScheduler();
   setInterval(runAccountScheduler, 60 * 1000);
+  // Support-Scheduler: feste Wartezeiten für Warteschleife und Klingeln
+  setInterval(() => support.runScheduler(), 5000);
   // Backup-Scheduler: wöchentliches Auto-Backup + monatliches Aufräumen.
   // Zeitstempel liegen in den Settings – überlebt damit Server-Neustarts.
   backups.runWeeklyAutoBackupIfDue();

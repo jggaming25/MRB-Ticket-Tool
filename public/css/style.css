@@ -758,3 +758,68 @@ body.mrb-locked .mrb-lockable select {
   .form-row { flex-direction: column; }
   .page-head { flex-direction: column; }
 }
+
+/* ---------- Voice-Support / Support-Hotline ---------- */
+.hidden { display: none !important; }
+.support-call-card {
+  max-width: 560px;
+  margin: 24px auto;
+  padding: 32px;
+  text-align: center;
+}
+.support-hero { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+.support-hero h2 { margin: 0; }
+.support-number-badge {
+  font-size: 1.6rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 10px 22px;
+  border-radius: 999px;
+  background: var(--accent-soft, rgba(88, 101, 242, 0.15));
+  color: var(--accent, #5865f2);
+  border: 1px dashed var(--accent, #5865f2);
+}
+.btn-lg { padding: 14px 30px; font-size: 1.05rem; }
+.waiting-pulse {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: rgba(88, 101, 242, 0.25);
+  animation: supportPulse 1.4s ease-in-out infinite;
+}
+@keyframes supportPulse {
+  0%, 100% { transform: scale(0.85); opacity: 0.6; }
+  50% { transform: scale(1.15); opacity: 1; }
+}
+.support-mic-controls { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+.support-in-call { color: #3ba55d; }
+.support-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin-bottom: 20px; }
+.support-panel h2 { margin-top: 0; font-size: 1.05rem; }
+.staff-shift-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.staff-status-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  display: inline-block;
+  margin-right: 8px;
+}
+.staff-status-dot.staff-on { background: #3ba55d; box-shadow: 0 0 0 4px rgba(59, 165, 93, 0.2); }
+.staff-status-dot.staff-off { background: #ed4245; box-shadow: 0 0 0 4px rgba(237, 66, 69, 0.2); }
+.staff-status-text { font-weight: 600; }
+.queue-list, .history-list { list-style: none; margin: 0; padding: 0; }
+.queue-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+.queue-item:last-child { border-bottom: none; }
+.queue-item-main { display: flex; flex-direction: column; }
+.my-call { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.my-call-actions { display: flex; gap: 8px; margin-top: 4px; }
+.badge-ringing { background: rgba(250, 166, 26, 0.2); color: #faa61a; padding: 2px 8px; border-radius: 999px; font-size: 0.75rem; }
+.badge-active { background: rgba(59, 165, 93, 0.2); color: #3ba55d; padding: 2px 8px; border-radius: 999px; font-size: 0.75rem; }
+.support-info ol { margin: 0 0 0 18px; padding: 0; }
+.support-info li { margin-bottom: 6px; }

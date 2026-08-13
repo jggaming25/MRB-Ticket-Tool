@@ -139,10 +139,35 @@ db.exec(`
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
+  -- Voice-Support: Ein-/Ausstempeln der Support-Mitarbeiter (HR/Inhaber).
+  CREATE TABLE IF NOT EXISTS support_shifts (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id       INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    clocked_in_at TEXT NOT NULL DEFAULT (datetime('now')),
+    clocked_out_at TEXT
+  );
+
+  -- Voice-Support: Anrufe (Warteschleife + WebRTC-Signalisierung).
+  -- status: waiting -> ringing -> active | ended | timeout
+  CREATE TABLE IF NOT EXISTS support_calls (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    caller_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    staff_id          INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    status            TEXT NOT NULL DEFAULT 'waiting',
+    joined_at         TEXT NOT NULL DEFAULT (datetime('now')),
+    assigned_at       TEXT,
+    started_at        TEXT,
+    ended_at          TEXT,
+    ended_reason      TEXT,
+    offer_caller      TEXT,
+    answer_staff      TEXT
+  );
+
   CREATE INDEX IF NOT EXISTS idx_tickets_user ON tickets(user_id);
   CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status);
   CREATE INDEX IF NOT EXISTS idx_messages_ticket ON messages(ticket_id);
   CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+  CREATE INDEX IF NOT EXISTS idx_support_calls_status ON support_calls(status);
 `);
 
 // Sanfte Migration fuer bestehende Datenbanken (neue Spalten ergaenzen).

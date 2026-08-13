@@ -112,6 +112,42 @@
 
       <hr class="admin-sep">
 
+      <h3>Voice-Support (Hotline)</h3>
+      <p class="hint">Einstellungen für die Support-Hotline. Aktuelle Nummer: <strong><%= adminData.support.hotline || '–' %></strong> – sie wird automatisch aus den Daten abgeleitet und nach Vorwahl-Wechsel neu erzeugt.</p>
+      <form method="post" action="/account/settings/admin/support" class="admin-form">
+        <div class="form-row">
+          <div class="form-group">
+            <label class="small">Vorwahl der Hotline-Nummer</label>
+            <input type="text" name="hotlinePrefix" class="input" value="<%= adminData.support.hotlinePrefix %>" placeholder="z. B. 0800">
+          </div>
+          <div class="form-group">
+            <label class="small">Wartezeit bis „kein Mitarbeiter verfügbar“ (Sekunden)</label>
+            <input type="number" name="waitMaxMs" class="input" min="10" max="600" value="<%= Math.round(adminData.support.waitMaxMs / 1000) %>">
+          </div>
+          <div class="form-group">
+            <label class="small">Klingelzeit bis zurück in die Warteschlange (Sekunden)</label>
+            <input type="number" name="ringTimeoutMs" class="input" min="5" max="120" value="<%= Math.round(adminData.support.ringTimeoutMs / 1000) %>">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="small">Aktualisierung der Seiten (Sekunden)</label>
+            <input type="number" name="pollMs" class="input" min="1" max="60" value="<%= Math.round(adminData.support.pollMs / 1000) %>">
+          </div>
+          <div class="form-group">
+            <label class="small">STUN-Server (kommagetrennt)</label>
+            <input type="text" name="stunServers" class="input" value="<%= adminData.support.stunServers.join(', ') %>">
+          </div>
+        </div>
+        <label class="small">Hinweistext, wenn kein Mitarbeiter verfügbar ist</label>
+        <input type="text" name="noStaffMessage" class="input" value="<%= adminData.support.noStaffMessage %>">
+        <label class="small">Text unter dem „Support anrufen“-Button (Wartezeit-Hinweis)</label>
+        <input type="text" name="queueEstimateLabel" class="input" value="<%= adminData.support.queueEstimateLabel %>">
+        <button type="submit" class="btn btn-primary">Voice-Support-Einstellungen speichern</button>
+      </form>
+
+      <hr class="admin-sep">
+
       <h3>System-Neustart</h3>
       <p class="hint">Startet den Server komplett neu (ca. 1–2 Minuten Ausfallzeit). Tickets und Daten bleiben erhalten.</p>
       <form method="post" action="/account/settings/admin/restart" class="inline-form">

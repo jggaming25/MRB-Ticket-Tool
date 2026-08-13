@@ -10,14 +10,22 @@ self.addEventListener('push', (event) => {
     body: data.body || '',
     icon: '/static/logo.png',
     badge: '/static/logo.png',
-    data: { url: data.url || '/' },
+    data: { url: data.url || '/', action: data.action || null },
   };
+  // Aktions-Buttons (z. B. "To Website" bei Support-Anrufen)
+  if (Array.isArray(data.actions) && data.actions.length) {
+    options.actions = data.actions;
+  }
   event.waitUntil(self.registration.showNotification(title, options));
 });
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const url = (event.notification.data && event.notification.data.url) || '/';
+  const data = event.notification.data || {};
+  // "accept"-Action: zur Support-Mitarbeiter-Konsole (Anruf annehmen).
+  const url = event.action === 'accept'
+    ? (data.action === 'accept' ? (data.url || '/support/staff') : '/support/staff')
+    : (data.url || '/');
   event.waitUntil((async () => {
     const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     for (const client of all) {
