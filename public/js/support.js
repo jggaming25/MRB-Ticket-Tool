@@ -7,12 +7,23 @@
 // Der Server-Zustand wird per Polling abgefragt; der eigentliche Sprachanruf
 // läuft über WebRTC direkt zwischen den Browsern. Die Signalisierung (SDP)
 // wird über die Datenbank ausgetauscht (kein Socket.io nötig).
+//
+// Ablauf (manuelle Annahme):
+//   1. Anrufer ruft an -> Warteschlange (Musik + geschätzte Wartezeit).
+//   2. Ein eingestempelter Mitarbeiter klickt in der Warteschlange auf
+//      "Annehmen" (dieser Klick erlaubt dem Browser auch das Mikrofon).
+//   3. Der Mitarbeiter erstellt das WebRTC-Angebot (offer), der Anrufer
+//      antwortet (answer) -> Verbindung steht, beide reden sofort los.
+//   4. Der Mitarbeiter kann den Anruf an den nächsten freien Mitarbeiter
+//      weiterleiten; der Anrufer bleibt dabei vorn in der Warteschlange.
 // ---------------------------------------------------------------------------
 (function () {
   const STAFF = window.SUPPORT_STAFF === true;
   const PUSH_KEY = window.SUPPORT_PUSH_KEY || '';
   const POLL_MS = Math.max(1000, Number(window.SUPPORT_POLL_MS) || 3000);
-  const STUN = [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }];
+  const STUN_LIST = Array.isArray(window.SUPPORT_STUN) && window.SUPPORT_STUN.length
+    ? window.SUPPORT_STUN.map((u) => ({ urls: u }))
+    : [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }];
 
   // ---- Kleine Helfer ------------------------------------------------------
   function $(id) { return document.getElementById(id); }
@@ -54,11 +65,20 @@
     return out;
   }
 
+  // ---- Audio entsperren (Browser blockiert Autoplay ohne Nutzeraktion) ----
+  let audioUnlocked = false;
+  function unlockAudio() {
+    if (audioUnlocked) return;
+    audioUnlocked = true;
+    document.addEventListener('pointerdown', () => {
+      document.querySelectorAll('audio').forEach((a) => {
+        if (a.paused) a.play().catch(() => {});
+      });
+    }, { passive: true });
+  }
+  unlockAudio();
+
   // ---- Warteschleifenmusik & Signaltöne ------------------------------------
-  // Spielt alle vom Inhaber hochgeladenen Songs aus der Datenbank
-  // (/api/support/hold-music) in zufälliger Reihenfolge als Endlosschleife.
-  // Ohne hochgeladene Songs fällt er auf die mitgelieferte Standard-
-  // Warteschleifenmusik und schließlich einen sanften Synth-Loop zurück.
   function HoldMusic() {
     let audio = null;
     let playing = false;
@@ -156,7 +176,7 @@
         if (!endHandlerAttached) {
           endHandlerAttached = true;
           audio.addEventListener('ended', () => {
-            if (playing) playIndex(index + 1); // nächster Song
+            if (playing) playIndex(index + 1);
           });
           audio.addEventListener('error', () => {
             if (playing && playlist.length > 1) playIndex(index + 1);
@@ -204,12 +224,17 @@
     remoteStream: null,
     async getStream() {
       if (this.localStream) return this.localStream;
-      this.localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      this.localStream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true },
+      });
       return this.localStream;
     },
     createPeer() {
       if (this.pc) this.pc.close();
-      this.pc = new RTCPeerConnection({ iceServers: STUN });
+      this.pc = new RTCPeerConnection({
+        iceServers: STUN_LIST,
+        iceCandidatePoolSize: 4,
+      });
       if (this.localStream) {
         this.localStream.getTracks().forEach((t) => this.pc.addTrack(t, this.localStream));
       }
@@ -229,6 +254,10 @@
     },
     setMuted(m) {
       if (this.localStream) this.localStream.getAudioTracks().forEach((t) => { t.enabled = !m; });
+    },
+    // Mikrofon ist nach Verbindungsaufbau immer aktiv.
+    unmute() {
+      if (this.localStream) this.localStream.getAudioTracks().forEach((t) => { t.enabled = true; });
     },
     async waitGathering(pc, timeoutMs) {
       if (pc.iceGatheringState === 'complete') return;
@@ -285,6 +314,7 @@
   if (STAFF) {
     const shiftBtn = $('shiftBtn');
     const queueList = $('queueList');
+    const busyList = $('busyList');
     const myCallContent = $('myCallContent');
     let clockedIn = false;
     let currentCallId = null;
@@ -299,9 +329,11 @@
       shiftBtn.textContent = clockedIn ? 'Ausstempeln' : 'Einstempeln';
       shiftBtn.classList.toggle('btn-primary', !clockedIn);
       shiftBtn.classList.toggle('btn-danger', clockedIn);
+      text('staffExtension', st.extension ? `Deine Nummer: #${st.extension}` : '');
       text('shiftSince', clockedIn ? `Seit ${fmtTime(st.shiftSince)}` : '');
       text('staffAvailability', `Freie Mitarbeiter: ${st.available}`);
       text('staffHotline', `Support-Nummer: ${st.hotline}`);
+      text('staffHours', st.supportHoursLabel ? `Support-Zeiten: ${st.supportHoursLabel}` : '');
       const hist = st.history || [];
       $('shiftHistory').innerHTML = hist.length
         ? `<ul class="history-list">${hist.map((h) =>
@@ -314,20 +346,43 @@
         queueList.innerHTML = '<p class="muted">Keine wartenden Anrufer.</p>';
         return;
       }
-      // Wartende Anrufer werden automatisch verbunden, sobald ein Mitarbeiter
-      // frei ist – kein manuelles Annehmen nötig.
       queueList.innerHTML = `<ul class="queue-list">${queue.map((c) => `
         <li class="queue-item">
           <div class="queue-item-main">
             <strong>${esc(c.callerName)}</strong>
             <span class="muted">${esc(c.display)} · Position ${c.position} · seit ${fmtTime(c.joinedAt)}</span>
           </div>
-          <span class="tag">Wird automatisch verbunden</span>
+          <button class="btn btn-primary btn-sm accept-call-btn" data-call-id="${c.id}">Annehmen</button>
         </li>`).join('')}</ul>`;
     }
 
+    function renderBusy(busy) {
+      if (!busy || !busy.length) {
+        busyList.innerHTML = '<p class="muted">Gerade ist niemand im Gespräch.</p>';
+        return;
+      }
+      busyList.innerHTML = `<ul class="busy-list">${busy.map((b) => `
+        <li>
+          ${esc(b.name)}${b.extension ? ` (${esc(b.extension)})` : ''}
+          <span class="tag ${b.status === 'active' ? 'tag-claimed' : 'tag-ringing'}">${b.status === 'active' ? 'Im Gespräch' : 'Wird verbunden'}</span>
+        </li>`).join('')}</ul>`;
+    }
+
+    async function acceptCall(callId) {
+      const r = await post(`/api/support/call/${callId}/accept`);
+      if (!r.ok && r.reason === 'busy') {
+        alert('Du hast bereits einen Anruf. Beende oder leite ihn erst weiter.');
+      }
+      refreshStaff();
+    }
+
+    queueList.addEventListener('click', (e) => {
+      const btn = e.target.closest('.accept-call-btn');
+      if (btn) acceptCall(Number(btn.dataset.callId));
+    });
+
     async function handleMyCall(callId) {
-      if (currentCallId === callId && offerSentFor === callId) return;
+      if (currentCallId === callId && offerSentFor === callId && myCallStatus === 'active') return;
       if (currentCallId && currentCallId !== callId) {
         CallManager.cleanup();
         offerSentFor = null;
@@ -343,43 +398,47 @@
         renderMyCall({ ended: true, text: c.endedReason || 'Anruf beendet.' });
         return;
       }
-      if (c.status === 'ringing' && c.offer) {
-        // SDP-Angebot des Anrufers liegt vor -> Answer erzeugen.
+      if (c.status === 'ringing') {
+        renderMyCall({ status: 'ringing', display: c.display, callerName: c.callerName });
         if (offerSentFor !== callId) {
           offerSentFor = callId;
-          notifyInPage('📞 Neuer Support-Anruf', `${c.callerName} wartet – du wirst verbunden.`, '/support/staff', [
+          notifyInPage('📞 Neuer Support-Anruf', `${c.callerName} – nimm den Anruf an.`, '/support/staff', [
             { action: 'open', title: 'To Website' },
           ]);
-          await createAnswer(callId, c.offer);
+          await createOffer(callId);
         }
-        renderMyCall({ status: 'ringing', display: c.display, callerName: c.callerName });
         return;
       }
-      if (c.status === 'active' || c.status === 'ringing') {
-        renderMyCall({ status: c.status, display: c.display, callerName: c.callerName });
+      if (c.status === 'active') {
+        myCallStatus = 'active';
+        renderMyCall({ status: 'active', display: c.display, callerName: c.callerName, staffExtension: c.staffExtension });
+        startRecording(callId);
+        CallManager.unmute();
         return;
       }
       renderMyCall({ status: c.status, display: c.display, callerName: c.callerName });
     }
 
-    async function createAnswer(callId, offerSdp) {
+    let myCallStatus = null;
+
+    // Der Mitarbeiter erstellt das SDP-Angebot (er hat durch den Klick auf
+    // "Annehmen" die Mikrofon-Freigabe).
+    async function createOffer(callId) {
       try {
         const stream = await CallManager.getStream();
         const pc = CallManager.createPeer();
-        await pc.setRemoteDescription(JSON.parse(offerSdp));
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
         await CallManager.waitGathering(pc, 6000);
-        await post('/api/support/call/signal', { callId, role: 'answer', sdp: JSON.stringify(pc.localDescription) });
-        renderMyCall({ status: 'active', display: callId, callerName: 'Mitarbeiter' });
+        await post('/api/support/call/signal', { callId, role: 'offer', sdp: JSON.stringify(pc.localDescription) });
+        CallManager.unmute();
+        myCallStatus = 'ringing';
       } catch (e) {
-        console.error('Answer fehlgeschlagen:', e);
+        console.error('Offer fehlgeschlagen:', e);
       }
     }
 
     // ---- Aufzeichnung (jedes Gespräch wird aufgezeichnet) ------------------
-    // Der Staff-Mix (eigenes Mikro + Stimme des Anrufers) wird im Browser
-    // zusammengemischt und als Audio-Datei an den Server hochgeladen.
     let recorder = null;
     let recorderChunks = [];
     let recorderMix = null;
@@ -401,7 +460,7 @@
       try {
         const local = CallManager.localStream;
         const remote = CallManager.remoteStream;
-        if (!local || !remote || !remote.getAudioTracks().length) return; // beim nächsten Poll erneut versuchen
+        if (!local || !remote || !remote.getAudioTracks().length) return;
         const ctx = new (window.AudioContext || window.webkitAudioContext)();
         const dest = ctx.createMediaStreamDestination();
         ctx.createMediaStreamSource(local).connect(dest);
@@ -455,9 +514,8 @@
       }
     }
 
-    // ---- Bestätigungsdialog: Hinweis zur Aufzeichnung ----------------------
+    // ---- Bestätigungsdialoge ----------------------------------------------
     const consentModal = $('recordConsentModal');
-
     function openRecordConsent(cb) {
       if (!consentModal) return cb();
       show(consentModal);
@@ -475,17 +533,45 @@
       cancel.addEventListener('click', onCancel);
     }
 
+    const transferModal = $('transferModal');
+    let transferCb = null;
+    function openTransferConfirm(cb) {
+      if (!transferModal) return cb();
+      transferCb = cb;
+      show(transferModal);
+      $('transferOk').addEventListener('click', onTransferOk);
+      $('transferCancel').addEventListener('click', onTransferCancel);
+    }
+    function closeTransfer() {
+      hide(transferModal);
+      $('transferOk').removeEventListener('click', onTransferOk);
+      $('transferCancel').removeEventListener('click', onTransferCancel);
+    }
+    function onTransferOk() {
+      const cb = transferCb;
+      transferCb = null;
+      closeTransfer();
+      if (cb) cb();
+    }
+    function onTransferCancel() {
+      transferCb = null;
+      closeTransfer();
+    }
+
     function renderMyCall(info) {
       if (!info) { myCallContent.innerHTML = '<p class="muted">Kein aktiver Anruf.</p>'; return; }
       if (info.ended) { myCallContent.innerHTML = `<p>${esc(info.text)}</p>`; return; }
+      const isActive = info.status === 'active';
       myCallContent.innerHTML = `
         <div class="my-call">
-          <span class="badge ${info.status === 'active' ? 'badge-active' : 'badge-ringing'}">${info.status === 'active' ? 'Im Gespräch' : 'Wird verbunden'}</span>
+          <span class="badge ${isActive ? 'badge-active' : 'badge-ringing'}">${isActive ? 'Im Gespräch' : 'Wird verbunden'}</span>
           <strong>${esc(info.display)}</strong>
           <span class="muted">Anrufer: ${esc(info.callerName || '–')}</span>
+          <span class="muted">Durchwahl: ${esc(info.staffExtension || '–')}</span>
           <p class="muted small" id="recordingStatus">${recordingActive ? '🎙️ Aufzeichnung läuft' : ''}</p>
           <div class="my-call-actions">
             <button class="btn btn-sm" id="staffMuteBtn">🔇 Stumm</button>
+            <button class="btn btn-sm" id="staffTransferBtn" ${isActive ? '' : 'disabled'}>↪️ Weiterleiten</button>
             <button class="btn btn-danger btn-sm" id="staffHangupBtn">Beenden</button>
           </div>
         </div>`;
@@ -496,12 +582,24 @@
         CallManager.setMuted(muted);
         muteBtn.textContent = muted ? '🔊 Ton an' : '🔇 Stumm';
       });
+      const transfer = $('staffTransferBtn');
+      if (transfer) transfer.addEventListener('click', () => {
+        openTransferConfirm(async () => {
+          await post(`/api/support/call/${currentCallId}/transfer`);
+          CallManager.cleanup();
+          currentCallId = null;
+          offerSentFor = null;
+          myCallStatus = null;
+          stopRecording();
+        });
+      });
       const hangup = $('staffHangupBtn');
       if (hangup) hangup.addEventListener('click', async () => {
         await post('/api/support/call/end', { callId: currentCallId });
         CallManager.cleanup();
         currentCallId = null;
         offerSentFor = null;
+        myCallStatus = null;
         stopRecording();
       });
     }
@@ -525,16 +623,16 @@
       if (!st.hotline) return;
       renderShift(st);
       renderQueue(st.queue || []);
+      renderBusy(st.busyStaff || []);
       if (st.myCall) {
         handleMyCall(st.myCall.id);
-        if (st.myCall.status === 'active') startRecording(st.myCall.id);
-        else stopRecording();
         const rs = $('recordingStatus');
         if (rs) rs.textContent = recordingActive ? '🎙️ Aufzeichnung läuft' : '';
       } else if (currentCallId) {
         CallManager.cleanup();
         currentCallId = null;
         offerSentFor = null;
+        myCallStatus = null;
         stopRecording();
         renderMyCall(null);
       }
@@ -550,7 +648,7 @@
   // =========================================================================
   const waitMusic = new HoldMusic();
   let callId = null;
-  let offerSent = false;
+  let answeredOffer = null;   // Fingerabdruck des beantworteten Angebots
   let streamReady = false;
   let timerInt = null;
   let joinedAtMs = null;
@@ -593,11 +691,22 @@
     const st = await getJson('/api/support/state');
     if (!st.hotline) return;
     text('hotlineNumber', st.hotline);
-    text('availabilityText', st.available > 0
-      ? `${st.available} Mitarbeiter derzeit verfügbar.`
-      : 'Derzeit ist kein Mitarbeiter verfügbar – dein Anruf wird trotzdem in die Warteschleife gestellt.');
+    text('supportHoursText', `Support-Zeiten: ${st.supportHoursLabel || 'Jederzeit erreichbar'}`);
+    const closed = st.supportOpen === false;
+    const closedBadge = $('closedBadge');
+    if (closedBadge) closedBadge.classList.toggle('hidden', !closed);
+    if (closed) {
+      text('availabilityText', 'Derzeit geschlossen – unser Team ist außerhalb der Support-Zeiten nicht erreichbar.');
+      startBtn.disabled = true;
+      startBtn.textContent = '📞 Derzeit geschlossen';
+    } else {
+      text('availabilityText', st.available > 0
+        ? `${st.available} Mitarbeiter derzeit verfügbar.`
+        : 'Derzeit ist kein Mitarbeiter verfügbar – dein Anruf wird trotzdem in die Warteschleife gestellt.');
+      startBtn.disabled = false;
+      startBtn.textContent = '📞 Support anrufen';
+    }
     if (st.call) {
-      // Bereits ein laufender Anruf -> fortführen
       callId = st.call;
       joinedAtMs = Date.now();
       pollCall();
@@ -616,24 +725,33 @@
     if (!r.ok || !r.call) { alert('Der Anruf konnte nicht gestartet werden. Bitte erneut versuchen.'); return; }
     callId = r.call.id;
     joinedAtMs = Date.now();
+    answeredOffer = null;
     showStage('waiting');
     startTimer();
     waitMusic.start();
     pollCall();
   }
 
-  async function sendOffer() {
-    if (offerSent || !callId) return;
-    offerSent = true;
+  // Der Anrufer antwortet auf das Angebot des Mitarbeiters (answer).
+  async function createAnswer(callId, offerSdp) {
     try {
+      await CallManager.getStream();
       const pc = CallManager.createPeer();
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
+      await pc.setRemoteDescription(JSON.parse(offerSdp));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
       await CallManager.waitGathering(pc, 6000);
-      await post('/api/support/call/signal', { callId, role: 'offer', sdp: JSON.stringify(pc.localDescription) });
+      await post('/api/support/call/signal', { callId, role: 'answer', sdp: JSON.stringify(pc.localDescription) });
+      CallManager.unmute();
     } catch (e) {
-      console.error('Offer fehlgeschlagen:', e);
+      console.error('Answer fehlgeschlagen:', e);
     }
+  }
+
+  function resetNegotiation() {
+    CallManager.cleanup();
+    answeredOffer = null;
+    streamReady = false;
   }
 
   async function pollCall() {
@@ -646,33 +764,32 @@
       showStage('waiting');
       waitMusic.start();
       startTimer();
+      // Zurueck in der Warteschlange (z. B. nach Weiterleitung) -> Verbindung zuruecksetzen.
+      resetNegotiation();
       text('queuePositionText', `Ihre Position in der Warteschlange: ${c.queuePosition}.`);
+      text('queueWaitText', c.queueWaitMinutes
+        ? `Geschätzte Wartezeit: ca. ${c.queueWaitMinutes} Minute${c.queueWaitMinutes === 1 ? '' : 'n'} (steigt mit jeder wartenden Anfrage).`
+        : '');
       return;
     }
     if (c.status === 'ringing') {
       showStage('connecting');
       waitMusic.stop();
       stopTimer();
-      if (!streamReady) {
-        try { await CallManager.getStream(); streamReady = true; } catch (e) { /* Mikrofon nicht verfügbar */ }
+      if (c.offer && answeredOffer !== c.offer) {
+        answeredOffer = c.offer;
+        await createAnswer(callId, c.offer);
       }
-      if (streamReady && !offerSent) sendOffer();
       return;
     }
     if (c.status === 'active') {
-      if (c.answer && offerSent && CallManager.pc) {
-        const pc = CallManager.pc;
-        if (pc.signalingState === 'stable') { /* bereits verbunden */ }
-        else if (pc.signalingState === 'have-local-offer') {
-          try {
-            await pc.setRemoteDescription(JSON.parse(c.answer));
-          } catch (e) { console.error('Answer übernehmen fehlgeschlagen:', e); }
-        }
-      }
       showStage('active');
       waitMusic.stop();
       stopTimer();
-      if (c.staffName) text('activeStaffName', c.staffName);
+      if (c.staffName) {
+        text('activeStaffName', `${c.staffName}${c.staffExtension ? ` (${c.staffExtension})` : ''}`);
+      }
+      CallManager.unmute();
       return;
     }
     if (c.status === 'timeout') {
@@ -698,7 +815,7 @@
 
   function endCleanup() {
     callId = null;
-    offerSent = false;
+    answeredOffer = null;
     streamReady = false;
     joinedAtMs = null;
     CallManager.cleanup();
@@ -735,7 +852,6 @@
   });
 
   refreshIdle();
-  // Ein gemeinsamer Poll-Zyklus: aktiver Anruf -> Anruf-Zustand, sonst -> Idle.
   setInterval(() => {
     if (callId) pollCall();
     else refreshIdle();

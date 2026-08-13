@@ -15,10 +15,24 @@
 const { db, getSetting, setSetting, logAccountAction } = require('./db');
 const config = require('./config');
 const push = require('./push');
+const whatsapp = require('./whatsapp');
 
 function nowIso() {
   return new Date().toISOString();
 }
+
+function berlinTime(date) {
+  try {
+    return new Date(date.toLocaleString('en-US', { timeZone: 'Europe/Berlin' }));
+  } catch {
+    return date;
+  }
+}
+
+// Wochentag-Name (1=Mo … 7=So) fuer die Zeiten-Anzeige.
+const WEEKDAY_LABELS = {
+  1: 'Mo', 2: 'Di', 3: 'Mi', 4: 'Do', 5: 'Fr', 6: 'Sa', 7: 'So',
+};
 
 function toPositiveInt(v, fallback, min, max) {
   const n = Number(v);
@@ -44,6 +58,9 @@ function getSettings() {
       hotlinePrefix: String(o.hotlinePrefix || d.hotlinePrefix).trim(),
       noStaffMessage: String(o.noStaffMessage || d.noStaffMessage),
       queueEstimateLabel: String(o.queueEstimateLabel || d.queueEstimateLabel),
+      minutesPerCall: toPositiveInt(o.minutesPerCall, d.minutesPerCall, 1, 30),
+      queueAlertThreshold: toPositiveInt(o.queueAlertThreshold, d.queueAlertThreshold, 1, 50),
+      supportHours: normalizeSupportHours(o.supportHours, d.supportHours),
       stunServers: Array.isArray(o.stunServers) && o.stunServers.length
         ? o.stunServers.map((s) => String(s).trim()).filter(Boolean)
         : d.stunServers,
@@ -51,6 +68,46 @@ function getSettings() {
   } catch {
     return d;
   }
+}
+
+// Support-Zeiten normalisieren: { enabled, days:[1-7], start:'HH:MM', end:'HH:MM' }
+function normalizeSupportHours(input, fallback) {
+  const f = fallback || config.support.supportHours || {};
+  if (!input || typeof input !== 'object') return { ...f };
+  const days = Array.isArray(input.days)
+    ? input.days.map(Number).filter((d) => Number.isInteger(d) && d >= 1 && d <= 7)
+    : (Array.isArray(f.days) ? f.days : []);
+  const timeOk = (t) => typeof t === 'string' && /^\d{2}:\d{2}$/.test(t);
+  return {
+    enabled: !!input.enabled,
+    days: days.length ? days : (Array.isArray(f.days) ? f.days : []),
+    start: timeOk(input.start) ? input.start : (timeOk(f.start) ? f.start : '09:00'),
+    end: timeOk(input.end) ? input.end : (timeOk(f.end) ? f.end : '18:00'),
+  };
+}
+
+// Ist der Support gerade (in Europe/Berlin) erreichbar?
+function isSupportOpen(now) {
+  const h = getSettings().supportHours;
+  if (!h || !h.enabled || !h.days || !h.days.length) return { open: true };
+  const t = berlinTime(now || new Date());
+  const day = t.getDay() === 0 ? 7 : t.getDay(); // 1=Mo … 7=So
+  if (!h.days.includes(day)) return { open: false, closedLabel: 'Heute geschlossen' };
+  const [sh, sm] = h.start.split(':').map(Number);
+  const [eh, em] = h.end.split(':').map(Number);
+  const nowMin = t.getHours() * 60 + t.getMinutes();
+  const startMin = sh * 60 + sm;
+  const endMin = eh * 60 + em;
+  return { open: nowMin >= startMin && nowMin < endMin };
+}
+
+// Text der Support-Zeiten, z. B. "Mo–Fr 09:00–18:00" oder "Immer erreichbar".
+function supportHoursLabel() {
+  const h = getSettings().supportHours;
+  if (!h || !h.enabled || !h.days || !h.days.length) return 'Jederzeit erreichbar';
+  const order = [1, 2, 3, 4, 5, 6, 7].filter((d) => h.days.includes(d));
+  const dayStr = order.map((d) => WEEKDAY_LABELS[d]).join(' ');
+  return `${dayStr} ${h.start}–${h.end} Uhr`;
 }
 
 // "Support-Nummer" – wird einmalig aus den vorhandenen Datenwerten abgeleitet
@@ -94,6 +151,23 @@ function saveSettings(input) {
     : [];
   const stunServers = stunInput.length ? stunInput : d.stunServers;
 
+  const minutesPerCall = toPositiveInt(input.minutesPerCall, d.minutesPerCall, 1, 30);
+  if (input.minutesPerCall != null && String(input.minutesPerCall).trim() !== '' && Number(input.minutesPerCall) !== minutesPerCall) {
+    errors.push('Wartezeit-Faktor: zwischen 1 und 30 Minuten.');
+  }
+  const queueAlertThreshold = toPositiveInt(input.queueAlertThreshold, d.queueAlertThreshold, 1, 50);
+  if (input.queueAlertThreshold != null && String(input.queueAlertThreshold).trim() !== '' && Number(input.queueAlertThreshold) !== queueAlertThreshold) {
+    errors.push('Warteschlangen-Alarm: zwischen 1 und 50 Anrufern.');
+  }
+  const supportHours = normalizeSupportHours({
+    enabled: input.supportHoursEnabled === true || input.supportHoursEnabled === '1' || input.supportHoursEnabled === 'on',
+    days: Array.isArray(input.supportHoursDays)
+      ? input.supportHoursDays.map(Number)
+      : [],
+    start: number(input.supportHoursStart),
+    end: number(input.supportHoursEnd),
+  }, d.supportHours);
+
   const payload = {
     ringTimeoutMs,
     pollMs,
@@ -101,6 +175,9 @@ function saveSettings(input) {
     noStaffMessage,
     queueEstimateLabel,
     stunServers,
+    minutesPerCall,
+    queueAlertThreshold,
+    supportHours,
   };
   setSetting('support_settings', JSON.stringify(payload));
   // Vorwahl geändert -> Hotline-Nummer neu ableiten.
@@ -112,6 +189,39 @@ function saveSettings(input) {
 
 function callDisplayNumber(id) {
   return `#SUP-${String(id).padStart(4, '0')}`;
+}
+
+// ---------------------------------------------------------------------------
+// Mitarbeiter-Durchwahl: Jeder Mitarbeiter bekommt automatisch eine eindeutige
+// Nummer (1, 2, 3, …). Frei werdende Nummern werden wiederverwendet.
+// ---------------------------------------------------------------------------
+function nextExtension() {
+  const used = new Set(db.prepare(
+    "SELECT extension FROM users WHERE extension IS NOT NULL AND role IN ('hr','hrhr')"
+  ).all().map((r) => r.extension));
+  let n = 1;
+  while (used.has(n)) n++;
+  return n;
+}
+
+function getOrAssignExtension(userId) {
+  const u = db.prepare('SELECT id, extension FROM users WHERE id = ?').get(userId);
+  if (!u) return null;
+  if (u.extension) return u.extension;
+  const ext = nextExtension();
+  db.prepare('UPDATE users SET extension = ? WHERE id = ?').run(ext, u.id);
+  return ext;
+}
+
+function extensionOf(userId) {
+  if (!userId) return null;
+  const u = db.prepare('SELECT extension FROM users WHERE id = ?').get(userId);
+  return u && u.extension ? u.extension : null;
+}
+
+function extensionLabel(userId) {
+  const ext = extensionOf(userId);
+  return ext != null ? `#${ext}` : '';
 }
 
 // ---------------------------------------------------------------------------
@@ -131,12 +241,13 @@ function clockIn(userId) {
   if (isClockedIn(userId)) {
     return { ok: true, already: true };
   }
+  const extension = getOrAssignExtension(userId);
   db.prepare(`
     INSERT INTO support_shifts (user_id, clocked_in_at) VALUES (?, ?)
   `).run(userId, nowIso());
-  logAccountAction(userId, userId, 'support_clockin', 'Für den Voice-Support eingestempelt');
-  const assigned = assignWaitingCalls();
-  return { ok: true, assigned };
+  logAccountAction(userId, userId, 'support_clockin',
+    `Für den Voice-Support eingestempelt (Durchwahl #${extension})`);
+  return { ok: true, extension };
 }
 
 function clockOut(userId) {
@@ -144,12 +255,14 @@ function clockOut(userId) {
   if (!shift) return { ok: true, already: true };
   db.prepare('UPDATE support_shifts SET clocked_out_at = ? WHERE id = ?').run(nowIso(), shift.id);
   logAccountAction(userId, userId, 'support_clockout', 'Aus dem Voice-Support ausgestempelt');
-  // Ggf. gerade ein laufender Anruf -> beenden, dann andere Wartende zuweisen.
+  // Ggf. gerade ein laufender Anruf -> beenden.
   const handled = currentHandledCall(userId);
   if (handled && handled.status !== 'ended') {
+    const user = db.prepare('SELECT global_name, username FROM users WHERE id = ?').get(userId);
+    const who = user ? (user.global_name || user.username) : 'Ein Mitarbeiter';
+    whatsappNotify(`${who} hat sich ausgestempelt, während ${callDisplayNumber(handled.id)} lief – Anruf beendet.`);
     endCallInternal(handled.id, 'ended', 'Mitarbeiter aus dem Voice-Support ausgestempelt');
   }
-  assignWaitingCalls();
   return { ok: true };
 }
 
@@ -229,40 +342,45 @@ function queuePositionOf(callId) {
   return (row ? row.c : 0) + 1;
 }
 
-function notifyStaffPush(staffId, call) {
+// Push-Benachrichtigung an alle freien, eingestempelten Mitarbeiter, dass ein
+// neuer Anrufer in der Warteschlange ist (Annahme muss der Mitarbeiter klicken).
+function notifyStaffNewCaller(call) {
   try {
-    if (!push.isConfigured() || !staffId) return;
+    if (!push.isConfigured()) return;
     const caller = db.prepare('SELECT username, global_name FROM users WHERE id = ?').get(call.caller_id);
     const name = caller ? (caller.global_name || caller.username) : 'ein Nutzer';
-    push.sendToUser(staffId, {
-      title: '📞 Neuer Support-Anruf',
-      body: `${callDisplayNumber(call.id)} von ${name} – du wirst automatisch verbunden.`,
-      url: '/support/staff',
-      actions: [
-        { action: 'open', title: 'To Website' },
-      ],
-    });
+    const staffIds = availableStaffIds();
+    for (const staffId of staffIds) {
+      push.sendToUser(staffId, {
+        title: '📞 Neuer Support-Anrufer',
+        body: `${callDisplayNumber(call.id)} von ${name} wartet – bitte annehmen.`,
+        url: '/support/staff',
+        actions: [
+          { action: 'open', title: 'To Website' },
+        ],
+      });
+    }
   } catch (e) {
     console.error('Support-Push fehlgeschlagen:', e.message);
   }
 }
 
-// Weist wartende Anrufe an verfügbare Mitarbeiter zu (FIFO). Liefert Anzahl
-// der neu zugewiesenen Anrufe.
-function assignWaitingCalls() {
+// Weist wartende Anrufe an freie Mitarbeiter zu (nur fuer Weiterleitung).
+// excludeStaffId verhindert, dass der weiterleitende Mitarbeiter den Anrufer
+// sofort wieder uebernimmt.
+function assignWaitingCalls({ excludeStaffId } = {}) {
   let assigned = 0;
   for (;;) {
     const waiting = db.prepare(`
       SELECT * FROM support_calls WHERE status = 'waiting' ORDER BY id ASC LIMIT 1
     `).get();
     if (!waiting) break;
-    const free = availableStaffIds();
+    const free = availableStaffIds().filter((id) => id !== excludeStaffId);
     if (!free.length) break;
     const staffId = free[0];
     db.prepare(`
       UPDATE support_calls SET staff_id = ?, status = 'ringing', assigned_at = ? WHERE id = ?
     `).run(staffId, nowIso(), waiting.id);
-    notifyStaffPush(staffId, getCall(waiting.id));
     assigned++;
   }
   return assigned;
@@ -278,9 +396,45 @@ function startCall(userId) {
     INSERT INTO support_calls (caller_id, status, joined_at) VALUES (?, 'waiting', ?)
   `).run(userId, nowIso());
   const call = getCall(info.lastInsertRowid);
-  // Sofort einem verfügbaren Mitarbeiter zuweisen, falls einer eingestempelt ist.
-  assignWaitingCalls();
+  // Keine automatische Zuweisung: Der Anrufer wartet, bis ein Mitarbeiter ihn
+  // ueber die Warteschlange annimmt.
+  notifyStaffNewCaller(call);
   return { ok: true, call: getCall(call.id) };
+}
+
+// Mitarbeiter nimmt einen wartenden Anruf an (Button in der Warteschlange).
+function acceptCall(staffId, callId) {
+  const call = getCall(callId);
+  if (!call) return { ok: false, reason: 'notfound' };
+  if (call.status !== 'waiting') return { ok: false, reason: 'invalid' };
+  if (!isClockedIn(staffId)) return { ok: false, reason: 'notclocked' };
+  if (currentHandledCall(staffId)) return { ok: false, reason: 'busy' };
+  getOrAssignExtension(staffId);
+  db.prepare(`
+    UPDATE support_calls SET staff_id = ?, status = 'ringing', assigned_at = ? WHERE id = ?
+  `).run(staffId, nowIso(), call.id);
+  return { ok: true, call: getCall(call.id) };
+}
+
+// Aktiven Anruf an den naechsten freien Mitarbeiter weiterleiten. Der Anrufer
+// bleibt vorn in der Warteschlange und wird direkt neu zugewiesen; wenn kein
+// anderer frei ist, wartet er dort auf die naechste Annahme.
+function transferCall(staffId, callId) {
+  const call = getCall(callId);
+  if (!call) return { ok: false, reason: 'notfound' };
+  if (call.staff_id !== staffId) return { ok: false, reason: 'forbidden' };
+  if (!['ringing', 'active'].includes(call.status)) return { ok: false, reason: 'invalid' };
+  const staff = db.prepare('SELECT global_name, username FROM users WHERE id = ?').get(staffId);
+  const who = staff ? (staff.global_name || staff.username) : 'Ein Mitarbeiter';
+  db.prepare(`
+    UPDATE support_calls
+    SET staff_id = NULL, status = 'waiting', assigned_at = NULL, started_at = NULL,
+        offer_staff = NULL, answer_caller = NULL
+    WHERE id = ?
+  `).run(call.id);
+  whatsappNotify(`${who} hat ${callDisplayNumber(call.id)} weitergeleitet – Anrufer bleibt vorn in der Warteschlange.`);
+  const assigned = assignWaitingCalls({ excludeStaffId: staffId });
+  return { ok: true, reassigned: assigned > 0 };
 }
 
 function endCallInternal(callId, status, reason) {
@@ -296,27 +450,36 @@ function endCall(userId, callId) {
   const isStaff = call.staff_id === userId;
   if (!isCaller && !isStaff) return { ok: false, reason: 'forbidden' };
   endCallInternal(call.id, 'ended', isCaller ? 'Anruf durch den Anrufer beendet' : 'Anruf durch den Mitarbeiter beendet');
-  assignWaitingCalls();
   return { ok: true };
 }
 
-// WebRTC-Signal (SDP) speichern. "offer" nur vom Anrufer, "answer" nur vom
-// zugewiesenen Mitarbeiter.
+// WebRTC-Signal (SDP) speichern. Seit der manuellen Annahme erstellt der
+// MITARBEITER das Angebot (offer -> offer_staff) und der ANRUFER antwortet
+// (answer -> answer_caller). Die Antwort verbindet den Anruf (status -> active).
 function setSignal(userId, callId, role, sdp) {
   const call = getCall(callId);
   if (!call) return { ok: false, reason: 'notfound' };
   const isCaller = call.caller_id === userId;
   const isStaff = call.staff_id === userId;
-  if (role === 'offer' && !isCaller) return { ok: false, reason: 'forbidden' };
-  if (role === 'answer' && !isStaff) return { ok: false, reason: 'forbidden' };
+  if (role === 'offer' && !isStaff) return { ok: false, reason: 'forbidden' };
+  if (role === 'answer' && !isCaller) return { ok: false, reason: 'forbidden' };
   if (!sdp || typeof sdp !== 'string' || sdp.length > 65535) {
     return { ok: false, reason: 'invalid' };
   }
   if (role === 'offer') {
-    db.prepare('UPDATE support_calls SET offer_caller = ? WHERE id = ?').run(sdp, call.id);
+    db.prepare('UPDATE support_calls SET offer_staff = ?, answer_caller = NULL WHERE id = ?').run(sdp, call.id);
   } else {
-    db.prepare('UPDATE support_calls SET answer_staff = ?, started_at = COALESCE(started_at, ?), status = CASE WHEN status = \'ringing\' THEN \'active\' ELSE status END WHERE id = ?')
-      .run(sdp, nowIso(), call.id);
+    db.prepare(`
+      UPDATE support_calls
+      SET answer_caller = ?, started_at = COALESCE(started_at, ?),
+          status = CASE WHEN status = 'ringing' THEN 'active' ELSE status END
+      WHERE id = ?
+    `).run(sdp, nowIso(), call.id);
+    if (call.status === 'ringing') {
+      const staff = db.prepare('SELECT global_name, username FROM users WHERE id = ?').get(call.staff_id);
+      const who = staff ? (staff.global_name || staff.username) : 'ein Mitarbeiter';
+      whatsappNotify(`📞 ${callDisplayNumber(call.id)} verbunden (${who})`);
+    }
   }
   return { ok: true };
 }
@@ -331,7 +494,7 @@ function callStateFor(userId, callId) {
 
   const caller = db.prepare('SELECT id, username, global_name FROM users WHERE id = ?').get(call.caller_id);
   const staff = call.staff_id
-    ? db.prepare('SELECT id, username, global_name FROM users WHERE id = ?').get(call.staff_id)
+    ? db.prepare('SELECT id, username, global_name, extension FROM users WHERE id = ?').get(call.staff_id)
     : null;
 
   return {
@@ -342,15 +505,19 @@ function callStateFor(userId, callId) {
       status: call.status,
       callerName: caller ? (caller.global_name || caller.username) : 'Unbekannt',
       staffName: staff ? (staff.global_name || staff.username) : null,
+      staffExtension: staff && staff.extension != null ? `#${staff.extension}` : null,
       joinedAt: call.joined_at,
       assignedAt: call.assigned_at,
       startedAt: call.started_at,
       endedAt: call.ended_at,
       endedReason: call.ended_reason,
       queuePosition: call.status === 'waiting' ? queuePositionOf(call.id) : null,
+      queueWaitMinutes: call.status === 'waiting'
+        ? queuePositionOf(call.id) * getSettings().minutesPerCall
+        : null,
       availableStaff: availableStaffCount(),
-      offer: isStaff ? call.offer_caller : null,
-      answer: isCaller ? call.answer_staff : null,
+      offer: isCaller ? call.offer_staff : null,
+      answer: isStaff ? call.answer_caller : null,
       role: isCaller ? 'caller' : 'staff',
     },
   };
@@ -362,6 +529,7 @@ function callStateFor(userId, callId) {
 function publicState(user) {
   const settings = getSettings();
   const call = activeCallOf(user.id);
+  const openNow = isSupportOpen();
   return {
     hotline: hotlineNumber(),
     available: availableStaffCount(),
@@ -369,6 +537,9 @@ function publicState(user) {
     pollMs: settings.pollMs,
     queueEstimateLabel: settings.queueEstimateLabel,
     noStaffMessage: settings.noStaffMessage,
+    minutesPerCall: settings.minutesPerCall,
+    supportHoursLabel: supportHoursLabel(),
+    supportOpen: openNow.open,
     call: call ? call.id : null,
   };
 }
@@ -384,17 +555,39 @@ function staffState(user) {
     joinedAt: c.joined_at,
     position: queuePositionOf(c.id),
   }));
+  // Alle eingestempelten Mitarbeiter inkl. deren Status (frei/im Gespraech).
+  const busy = db.prepare(`
+    SELECT c.staff_id, c.status, u.global_name, u.username, u.extension
+    FROM support_calls c
+    JOIN users u ON u.id = c.staff_id
+    WHERE c.status IN ('ringing','active')
+  `).all();
+  const busyStaff = busy.map((b) => ({
+    id: b.staff_id,
+    name: b.global_name || b.username,
+    extension: b.extension != null ? `#${b.extension}` : null,
+    status: b.status,
+  }));
   return {
     hotline: hotlineNumber(),
     available: availableStaffCount(),
     clockedIn: !!shift,
+    extension: getOrAssignExtension(user.id),
     shiftSince: shift ? shift.clocked_in_at : null,
-    myCall: handled ? { id: handled.id, display: callDisplayNumber(handled.id), status: handled.status, callerName: null } : null,
+    myCall: handled ? {
+      id: handled.id,
+      display: callDisplayNumber(handled.id),
+      status: handled.status,
+      callerName: null,
+    } : null,
     queue,
+    busyStaff,
     history: shiftHistory(user.id),
     ringTimeoutMs: settings.ringTimeoutMs,
     pollMs: settings.pollMs,
     noStaffMessage: settings.noStaffMessage,
+    minutesPerCall: settings.minutesPerCall,
+    supportHoursLabel: supportHoursLabel(),
   };
 }
 
@@ -424,12 +617,45 @@ function runScheduler() {
     const assigned = new Date(call.assigned_at).getTime();
     if (!Number.isNaN(assigned) && now - assigned >= settings.ringTimeoutMs) {
       db.prepare(`
-        UPDATE support_calls SET staff_id = NULL, status = 'waiting', assigned_at = NULL WHERE id = ?
+        UPDATE support_calls
+        SET staff_id = NULL, status = 'waiting', assigned_at = NULL,
+            offer_staff = NULL, answer_caller = NULL
+        WHERE id = ?
       `).run(call.id);
     }
   }
 
-  assignWaitingCalls();
+  // WhatsApp-Hinweise zu wichtigen Situationen (gedeckelt, damit das
+  // CallMeBot-Limit von ~16 Nachrichten/240 min nicht gesprengt wird).
+  const waitingCount = db.prepare("SELECT COUNT(*) AS c FROM support_calls WHERE status = 'waiting'").get().c;
+  const clockedIn = db.prepare(`
+    SELECT COUNT(*) AS c FROM support_shifts
+    WHERE clocked_out_at IS NULL
+  `).get().c;
+  if (waitingCount > 0 && clockedIn === 0) {
+    debouncedWhatsApp('no-staff-waiting', 20 * 60 * 1000,
+      `🚨 Wartende Anrufer, aber KEIN Mitarbeiter eingestempelt (${waitingCount} in der Warteschlange).`);
+  } else if (waitingCount >= settings.queueAlertThreshold && settings.queueAlertThreshold > 0) {
+    debouncedWhatsApp(`queue-${settings.queueAlertThreshold}`, 20 * 60 * 1000,
+      `⚠️ Warteschlange: ${waitingCount} Anrufer warten (${availableStaffCount()} frei).`);
+  }
+}
+
+// WhatsApp-Nachricht senden (fire-and-forget), mit Zeitdeckelung pro Key.
+function whatsappNotify(text) {
+  try {
+    if (whatsapp.isConfigured()) whatsapp.sendMessage(String(text).slice(0, 500));
+  } catch (e) {
+    console.error('WhatsApp-Benachrichtigung fehlgeschlagen:', e.message);
+  }
+}
+
+function debouncedWhatsApp(key, minIntervalMs, text) {
+  const now = Date.now();
+  if (debouncedWhatsApp.last && debouncedWhatsApp.last[key] && now - debouncedWhatsApp.last[key] < minIntervalMs) return;
+  if (!debouncedWhatsApp.last) debouncedWhatsApp.last = {};
+  debouncedWhatsApp.last[key] = now;
+  whatsappNotify(text);
 }
 
 // ---------------------------------------------------------------------------
@@ -516,11 +742,17 @@ module.exports = {
   saveSettings,
   hotlineNumber,
   callDisplayNumber,
+  isSupportOpen,
+  supportHoursLabel,
+  getOrAssignExtension,
+  extensionOf,
   isClockedIn,
   clockIn,
   clockOut,
   shiftHistory,
   startCall,
+  acceptCall,
+  transferCall,
   endCall,
   setSignal,
   callStateFor,

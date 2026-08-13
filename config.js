@@ -148,11 +148,29 @@ module.exports = {
     hotlinePrefix: '0800',       // Vorwahl der Support-Hotline
     ringTimeoutMs: 45 * 1000,    // Zeit, die ein zugewiesener Mitarbeiter zum Annehmen hat
     pollMs: 3000,                // Polling-Intervall der Clients (Server-Zustand)
-    stunServers: ['stun:stun.l.google.com:19302'],
+    stunServers: [
+      'stun:stun.l.google.com:19302',
+      'stun:stun1.l.google.com:19302',
+      'stun:stun2.l.google.com:19302',
+      'stun:stun3.l.google.com:19302',
+      'stun:stun4.l.google.com:19302',
+      'stun:stun.cloudflare.com:3478',
+    ],
     noStaffMessage:
       'Derzeit ist leider kein Mitarbeiter für den Voice-Support verfügbar. ' +
       'Bitte versuchen Sie es später noch einmal.',
     queueEstimateLabel: 'Ihre voraussichtliche Wartezeit beträgt 1–2 Minuten.',
+    // Geschaetzte Dauer eines Gespraechs (Minuten) fuer die Wartezeit-Anzeige.
+    minutesPerCall: 3,
+    // Ab dieser Anzahl wartender Anrufer wird per WhatsApp ein Hinweis gesendet.
+    queueAlertThreshold: 2,
+    // Erreichbarkeitszeiten (Europe/Berlin). days: 1=Montag … 7=Sonntag.
+    supportHours: {
+      enabled: false,
+      days: [1, 2, 3, 4, 5],
+      start: '09:00',
+      end: '18:00',
+    },
   },
 
   // Meldung, die bei gesperrtem Zugriff (Lockdown) auf der Login-Seite

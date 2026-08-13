@@ -768,6 +768,9 @@ app.post('/account/settings/admin/alarm', requireRoot, (req, res) => {
 // Voice-Support: Einstellungen (Wartezeiten, Hotline-Vorwahl, Texte) speichern
 app.post('/account/settings/admin/support', requireRoot, (req, res) => {
   const s = (v) => { const n = Number(v); return Number.isFinite(n) ? String(Math.round(n)) : ''; };
+  const days = Array.isArray(req.body.supportHoursDays)
+    ? req.body.supportHoursDays.map(Number)
+    : [];
   const result = support.saveSettings({
     // UI-Eingabe in Sekunden, Speicherung intern in Millisekunden
     ringTimeoutMs: s(req.body.ringTimeoutMs) !== '' ? String(Number(s(req.body.ringTimeoutMs)) * 1000) : '',
@@ -775,6 +778,12 @@ app.post('/account/settings/admin/support', requireRoot, (req, res) => {
     hotlinePrefix: req.body.hotlinePrefix,
     noStaffMessage: req.body.noStaffMessage,
     queueEstimateLabel: req.body.queueEstimateLabel,
+    minutesPerCall: s(req.body.minutesPerCall),
+    queueAlertThreshold: s(req.body.queueAlertThreshold),
+    supportHoursEnabled: req.body.supportHoursEnabled,
+    supportHoursDays: days,
+    supportHoursStart: req.body.supportHoursStart,
+    supportHoursEnd: req.body.supportHoursEnd,
     stunServers: req.body.stunServers ? String(req.body.stunServers).split(',').map((s) => s.trim()) : [],
   });
   if (result.errors.length) {
@@ -999,11 +1008,13 @@ const supportApiLimiter = rateLimit({
 });
 
 app.get('/support', requireLogin, (req, res) => {
-  res.render('support', { title: 'Voice-Support', staff: false, pollMs: support.getSettings().pollMs });
+  const s = support.getSettings();
+  res.render('support', { title: 'Voice-Support', staff: false, pollMs: s.pollMs, stunServers: s.stunServers });
 });
 
 app.get('/support/staff', requireLogin, requireHR, (req, res) => {
-  res.render('support', { title: 'Voice-Support – Mitarbeiter', staff: true, pollMs: support.getSettings().pollMs });
+  const s = support.getSettings();
+  res.render('support', { title: 'Voice-Support – Mitarbeiter', staff: true, pollMs: s.pollMs, stunServers: s.stunServers });
 });
 
 // Öffentlicher Status der Hotline (Hotline-Nummer, freie Mitarbeiter).
@@ -1027,6 +1038,24 @@ app.post('/api/support/clockout', requireLogin, requireHR, (req, res) => {
 app.get('/api/support/staff/state', requireLogin, requireHR, (req, res) => {
   res.set('Cache-Control', 'no-store');
   res.json(support.staffState(req.user));
+});
+
+// Anruf annehmen (Mitarbeiter klickt in der Warteschlange auf "Annehmen").
+app.post('/api/support/call/:id/accept', requireLogin, requireHR, (req, res) => {
+  const callId = Number(req.params.id);
+  if (!Number.isInteger(callId) || callId <= 0) {
+    return res.status(400).json({ ok: false, reason: 'invalid' });
+  }
+  res.json(support.acceptCall(req.user.id, callId));
+});
+
+// Aktiven Anruf an den nächsten freien Mitarbeiter weiterleiten.
+app.post('/api/support/call/:id/transfer', requireLogin, requireHR, (req, res) => {
+  const callId = Number(req.params.id);
+  if (!Number.isInteger(callId) || callId <= 0) {
+    return res.status(400).json({ ok: false, reason: 'invalid' });
+  }
+  res.json(support.transferCall(req.user.id, callId));
 });
 
 // Anruf starten (legt ggf. Warteschlangen-Eintrag an / weist zu).

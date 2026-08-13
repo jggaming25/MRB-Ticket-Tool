@@ -811,26 +811,32 @@ function findMail(subjectPart) {
 
   r = await get(`/api/support/call/${callId}`, userCookie);
   st = JSON.parse(r.body);
-  ok('Support: Anruf dem eingestempelten HR zugewiesen (ringing)', st.ok === true && st.call && st.call.status === 'ringing' && st.call.role === 'caller');
+  ok('Support: Anruf wartet auf manuelle Annahme (waiting)', st.ok === true && st.call && st.call.status === 'waiting' && st.call.role === 'caller');
 
   r = await get(`/api/support/call/${callId}`, lockUser);
   st = JSON.parse(r.body);
   ok('Support: Fremder Nutzer hat keinen Zugriff auf den Anruf (403)', st.ok === false && st.reason === 'forbidden');
 
-  // WebRTC-Signalisierung: Anrufer sendet Offer, HR sendet Answer -> active
-  r = await postJson('/api/support/call/signal', { callId, role: 'offer', sdp: 'v=0\r\no=caller' }, userCookie);
-  ok('Support: Offer des Anrufers gespeichert', JSON.parse(r.body).ok === true);
+  // Manuelle Annahme: HR klickt "Annehmen" -> ringing. Danach erstellt der
+  // MITARBEITER das WebRTC-Offer (offer_staff), der ANRUFER antwortet
+  // (answer_caller) -> active.
+  r = await postJson('/api/support/call/' + callId + '/accept', {}, hrCookie);
+  st = JSON.parse(r.body);
+  ok('Support: HR nimmt Anruf manuell an (ringing)', st.ok === true && st.call && st.call.status === 'ringing');
 
-  r = await postJson('/api/support/call/signal', { callId, role: 'answer', sdp: 'v=0\r\no=staff' }, hrCookie);
-  ok('Support: Answer des HR gespeichert', JSON.parse(r.body).ok === true);
+  r = await postJson('/api/support/call/signal', { callId, role: 'offer', sdp: 'v=0\r\no=staff' }, hrCookie);
+  ok('Support: Offer des HR gespeichert', JSON.parse(r.body).ok === true);
+
+  r = await postJson('/api/support/call/signal', { callId, role: 'answer', sdp: 'v=0\r\no=caller' }, userCookie);
+  ok('Support: Answer des Anrufers gespeichert', JSON.parse(r.body).ok === true);
 
   r = await get(`/api/support/call/${callId}`, hrCookie);
   st = JSON.parse(r.body);
-  ok('Support: Anruf nach Answer aktiv (beide Seiten), Staff sieht Offer', st.ok === true && st.call.status === 'active' && st.call.role === 'staff' && st.call.offer === 'v=0\r\no=caller');
+  ok('Support: Anruf nach Answer aktiv (beide Seiten), Staff sieht Answer', st.ok === true && st.call.status === 'active' && st.call.role === 'staff' && st.call.answer === 'v=0\r\no=caller');
 
   r = await get(`/api/support/call/${callId}`, userCookie);
   st = JSON.parse(r.body);
-  ok('Support: Anrufer sieht Answer', st.ok === true && st.call.answer === 'v=0\r\no=staff');
+  ok('Support: Anrufer sieht Offer des HR', st.ok === true && st.call.role === 'caller' && st.call.offer === 'v=0\r\no=staff');
 
   // Kein Mitarbeiter verfügbar -> Warteschleife läuft endlos weiter (kein Timeout).
   const secondCall = await postJson('/api/support/call/start', {}, lockUser);
@@ -846,6 +852,15 @@ function findMail(subjectPart) {
   r = await get(`/api/support/call/${s2.call.id}`, lockUser);
   st = JSON.parse(r.body);
   ok('Support: Anruf-Zustand liefert Position + freie Mitarbeiter', st.ok === true && typeof st.call.queuePosition === 'number' && typeof st.call.availableStaff === 'number');
+
+  // Weiterleitung: aktiven Anruf an den naechsten freien Mitarbeiter weitergeben.
+  r = await postJson('/api/support/call/' + callId + '/transfer', {}, hrCookie);
+  const tr = JSON.parse(r.body);
+  const trRow = db.prepare('SELECT status, staff_id FROM support_calls WHERE id = ?').get(callId);
+  ok('Support: Anruf wird weitergeleitet (zurueck in die Warteschlange)', tr.ok === true && trRow.status === 'waiting' && trRow.staff_id === null);
+  // Fuer die spaeteren Aufzeichnungs-Tests nimmt der HR den Anruf wieder an.
+  const reaccept = support.acceptCall(hrUser.id, callId);
+  ok('Support: Anruf nach Weiterleitung erneut annehmbar', reaccept.ok === true);
 
   // Anruf beenden (Anrufer)
   r = await postJson('/api/support/call/end', { callId }, userCookie);
@@ -877,6 +892,9 @@ function findMail(subjectPart) {
   await post('/account/settings/admin/support', { ringTimeoutMs: '45', hotlinePrefix: '0800' }, hrhrCookie);
   const reverted = JSON.parse(getSetting('support_settings'));
   ok('Support: Standardwerte wiederhergestellt', reverted.ringTimeoutMs === 45000);
+
+  r = await get('/account/settings', hrhrCookie);
+  ok('Support: Admin-UI zeigt Wartezeit-Faktor, Alarm-Schwellwert + Support-Zeiten', r.status === 200 && r.body.includes('name="minutesPerCall"') && r.body.includes('name="queueAlertThreshold"') && r.body.includes('name="supportHoursEnabled"') && r.body.includes('name="supportHoursDays"'));
 
   // Warteschleifenmusik: Song hinzufügen, listen, laden und löschen
   const songId = support.addHoldMusic({ name: 'test-song.mp3', mime: 'audio/mpeg', size: 4, data: Buffer.from([0x1, 0x2, 0x3, 0x4]), userId: 1 });

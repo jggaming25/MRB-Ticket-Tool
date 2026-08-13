@@ -273,6 +273,7 @@ function migrateUsers() {
   add('discord_roles', 'TEXT');
   add('disable_until', 'TEXT');
   add('delete_at', 'TEXT');
+  add('extension', 'INTEGER');
   // Altes is_staff-Flag auf neue Rollen abbilden
   if (cols.includes('is_staff') && !cols.includes('role')) {
     db.exec("UPDATE users SET role = 'hr' WHERE is_staff = 1");
@@ -319,10 +320,32 @@ function migrateUsers() {
       data         TEXT NOT NULL
     );
   `);
+  // Jeder Mitarbeiter bekommt eine eindeutige Durchwahl/Nummer (auto-vergeben).
+  try {
+    db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_extension ON users(extension) WHERE extension IS NOT NULL');
+  } catch (e) {
+    console.warn('Unique-Index users.extension konnte nicht angelegt werden:', e.message);
+  }
+}
+
+// Voice-Support-Anrufe: Die Signalisierung laeuft seit der manuellen
+// Annahme so, dass der Mitarbeiter das SDP-Angebot (offer) erstellt und der
+// Anrufer darauf antwortet (answer). Dafuer kommen die neuen Spalten hinzu.
+function migrateSupportCalls() {
+  const cols = db.prepare('PRAGMA table_info(support_calls)').all().map((c) => c.name);
+  const add = (name, def) => {
+    if (!cols.includes(name)) {
+      db.exec(`ALTER TABLE support_calls ADD COLUMN ${name} ${def}`);
+      cols.push(name);
+    }
+  };
+  add('offer_staff', 'TEXT');
+  add('answer_caller', 'TEXT');
 }
 migrateUsers();
 migrateTickets();
 migrateMessages();
+migrateSupportCalls();
 
 // Anzeigenamen fuer Audit-Log-Aktionen (Roh-Keys -> deutsche Beschriftung).
 const LOG_ACTION_LABELS = {

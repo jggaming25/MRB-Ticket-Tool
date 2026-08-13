@@ -139,6 +139,47 @@
         <input type="text" name="noStaffMessage" class="input" value="<%= adminData.support.noStaffMessage %>">
         <label class="small">Text unter dem „Support anrufen“-Button (Wartezeit-Hinweis)</label>
         <input type="text" name="queueEstimateLabel" class="input" value="<%= adminData.support.queueEstimateLabel %>">
+        <div class="form-row">
+          <div class="form-group">
+            <label class="small">Geschätzte Minuten pro Anruf (Wartezeit-Anzeige)</label>
+            <input type="number" name="minutesPerCall" class="input" min="1" max="30" value="<%= adminData.support.minutesPerCall %>">
+          </div>
+          <div class="form-group">
+            <label class="small">WhatsApp-Alarm ab dieser Warteschlangen-Größe</label>
+            <input type="number" name="queueAlertThreshold" class="input" min="1" max="50" value="<%= adminData.support.queueAlertThreshold %>">
+          </div>
+        </div>
+        <%
+          const hourDays = adminData.support.supportHours && adminData.support.supportHours.days
+            ? adminData.support.supportHours.days
+            : [];
+          const hourStart = adminData.support.supportHours ? adminData.support.supportHours.start : '09:00';
+          const hourEnd = adminData.support.supportHours ? adminData.support.supportHours.end : '18:00';
+          const hourEnabled = adminData.support.supportHours ? adminData.support.supportHours.enabled : false;
+          const dayNames = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
+        %>
+        <div class="form-group" style="margin-top:4px;">
+          <label class="small">Support-Zeiten festlegen (deaktiviert = immer erreichbar)</label>
+          <label class="check-line" style="margin:6px 0 8px;">
+            <input type="checkbox" name="supportHoursEnabled" value="1" <%= hourEnabled ? 'checked' : '' %>>
+            Nur zu festen Zeiten erreichbar
+          </label>
+          <div class="support-days">
+            <% dayNames.forEach((dn, i) => { %>
+              <label class="check-line"><input type="checkbox" name="supportHoursDays" value="<%= i + 1 %>" <%= hourDays.includes(i + 1) ? 'checked' : '' %>> <%= dn %></label>
+            <% }) %>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="small">Von (HH:MM, Europe/Berlin)</label>
+              <input type="time" name="supportHoursStart" class="input" value="<%= hourStart %>">
+            </div>
+            <div class="form-group">
+              <label class="small">Bis (HH:MM)</label>
+              <input type="time" name="supportHoursEnd" class="input" value="<%= hourEnd %>">
+            </div>
+          </div>
+        </div>
         <button type="submit" class="btn btn-primary">Voice-Support-Einstellungen speichern</button>
       </form>
 
