@@ -8,13 +8,17 @@ const MAIL_FROM = process.env.MAIL_FROM || 'TicketSystem MRB <noreply@localhost>
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3000';
 
 let transporter = null;
+let fallbackTransporter = null;
+
 // Im Testmodus (NODE_ENV='test') nie SMTP nutzen – auch wenn SMTP_HOST in
 // der .env steht. Mails landen dann im mail-log/, statt echte Mails zu senden.
-if (process.env.NODE_ENV !== 'test' && process.env.SMTP_HOST && process.env.SMTP_USER) {
-  transporter = nodemailer.createTransport({
+const SMTP_ENABLED = process.env.NODE_ENV !== 'test' && process.env.SMTP_HOST && process.env.SMTP_USER;
+
+function createTransport({ port, secure } = {}) {
+  return nodemailer.createTransport({
     host: process.env.SMTP_HOST,
-    port: Number(process.env.SMTP_PORT || 587),
-    secure: String(process.env.SMTP_SECURE || 'false') === 'true',
+    port: port || Number(process.env.SMTP_PORT || 587),
+    secure: secure !== undefined ? !!secure : String(process.env.SMTP_SECURE || 'false') === 'true',
     auth: {
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASS || '',
@@ -27,6 +31,29 @@ if (process.env.NODE_ENV !== 'test' && process.env.SMTP_HOST && process.env.SMTP
     // der Versand sonst in einem endlosen Timeout hängen bleibt.
     family: 4,
   });
+}
+
+if (SMTP_ENABLED) {
+  transporter = createTransport();
+  // Fallback: Manche Cloud-Netzwerke blockieren Port 587. Dann wird derselbe
+  // Server über Port 465 (implicit TLS) probiert. Ist 465 bereits konfiguriert,
+  // gibt es keinen zusätzlichen Fallback.
+  if (Number(process.env.SMTP_PORT || 587) !== 465) {
+    fallbackTransporter = createTransport({ port: 465, secure: true });
+  }
+}
+
+// Nur Verbindungs-/Netzwerk-Fehler sind Kandidaten fuer den Fallback-Umweg.
+// Auth-Fehler (falsche Zugangsdaten) wuerden durch einen Port-Wechsel nicht behoben.
+const NETWORK_ERROR_CODES = new Set([
+  'ETIMEDOUT', 'ESOCKETTIMEDOUT', 'ECONNREFUSED', 'ECONNRESET', 'EHOSTUNREACH',
+  'ENETUNREACH', 'EPIPE', 'EAI_AGAIN',
+]);
+function isConnectionError(err) {
+  if (!err) return false;
+  const code = err.code || err.syscall;
+  if (typeof code === 'string' && NETWORK_ERROR_CODES.has(code)) return true;
+  return /timed ?out|timeout|temporary failure|network/i.test(err.message || '');
 }
 
 // Sicherheitsnetz: Sollte nodemailer den SMTP-Vorgang trotz Timeouts nicht
@@ -89,32 +116,52 @@ function writeMailLog(to, subject, html) {
 
 async function sendMail({ to, subject, html }) {
   if (!to) return false;
-  if (transporter) {
+  if (!transporter && !fallbackTransporter) {
+    // Fallback: Mail in mail-log/ schreiben (kein SMTP konfiguriert)
+    writeMailLog(to, subject, html);
+    console.log(`[MAIL] (SMTP nicht konfiguriert -> mail-log/) An: ${to} | Betreff: ${subject}`);
+    return true;
+  }
+  const candidates = [
+    { transport: transporter, label: `${process.env.SMTP_PORT || 587}` },
+    { transport: fallbackTransporter, label: '465 (TLS)' },
+  ].filter((c) => c.transport);
+
+  for (let i = 0; i < candidates.length; i++) {
+    const { transport, label } = candidates[i];
+    const hasNext = i < candidates.length - 1;
     try {
-      console.log(`[MAIL] Versand gestartet an ${to} (${subject}) via ${process.env.SMTP_HOST}:${process.env.SMTP_PORT} als ${process.env.SMTP_USER}, From=${MAIL_FROM}`);
+      console.log(`[MAIL] Versand gestartet an ${to} (${subject}) via ${process.env.SMTP_HOST}:${label} als ${process.env.SMTP_USER}, From=${MAIL_FROM}`);
       const ok = await withSendTimeout(
-        transporter.sendMail({ from: MAIL_FROM, to, subject, html })
+        transport.sendMail({ from: MAIL_FROM, to, subject, html })
       );
       if (ok) {
         console.log(`[MAIL] Versand OK an ${to} (${subject})`);
-      } else {
-        writeMailLog(to, subject, html);
-        console.error(`[MAIL] SMTP-Zeitüberschreitung an ${to} (${subject}) – Mail in mail-log/ gesichert`);
+        return true;
       }
-      return ok;
+      // Zeitüberschreitung: erst Fallback versuchen, sonst lokal sichern.
+      if (hasNext) {
+        console.warn(`[MAIL] SMTP-Zeitüberschreitung via ${label} – versuche Fallback ${candidates[i + 1].label}`);
+        continue;
+      }
+      writeMailLog(to, subject, html);
+      console.error(`[MAIL] SMTP-Zeitüberschreitung an ${to} (${subject}) – Mail in mail-log/ gesichert`);
+      return false;
     } catch (err) {
       // Bei SMTP-Fehlern (falsche Zugangsdaten, unverifizierter Absender o. a.)
       // die Mail trotzdem lokal sichern und den Fehler sichtbar loggen, damit
       // das Problem auf Render im Log auftaucht statt still zu scheitern.
+      // Reine Verbindungsfehler weichen vorher auf den Fallback-Port aus.
+      if (isConnectionError(err) && hasNext) {
+        console.warn(`[MAIL] SMTP-Fehler via ${label} (${err.code || err.message}) – versuche Fallback ${candidates[i + 1].label}`);
+        continue;
+      }
       writeMailLog(to, subject, html);
       console.error(`[MAIL] SMTP-Fehler an ${to} (${subject}):`, err.message);
       return false;
     }
   }
-  // Fallback: Mail in mail-log/ schreiben (kein SMTP konfiguriert)
-  writeMailLog(to, subject, html);
-  console.log(`[MAIL] (SMTP nicht konfiguriert -> mail-log/) An: ${to} | Betreff: ${subject}`);
-  return true;
+  return false;
 }
 
 async function sendAccountDisabled(to, reason) {
@@ -188,28 +235,40 @@ async function sendTicketAssignedToHR(to, ticketNumber, subject, fromName) {
 // zu Brevo überhaupt aufgebaut werden kann und loggt das Ergebnis sichtbar.
 // Zeigt bei Fehlern den konkreten Grund (DNS, ECONNREFUSED, ETIMEDOUT, TLS, Auth).
 async function testConnection() {
-  if (!transporter) {
+  if (!transporter && !fallbackTransporter) {
     console.warn('[MAIL] SMTP-Selbsttest: kein SMTP konfiguriert (Mails landen im mail-log/)');
     return;
   }
   const details = { host: process.env.SMTP_HOST, port: process.env.SMTP_PORT, user: process.env.SMTP_USER };
-  try {
-    // Sicherheitsnetz, damit der Start nicht hängen bleibt, falls der Server
-    // gar nicht antwortet. Der echte Fehler kommt trotzdem in den catch-Zweig.
-    const result = await Promise.race([
-      transporter.verify().then(() => 'ok'),
-      new Promise((resolve) => setTimeout(() => resolve('timeout'), 30000)),
-    ]);
-    if (result === 'ok') {
-      console.log(`[MAIL] SMTP-Selbsttest OK: ${details.host}:${details.port} (User ${details.user}) erreichbar`);
-    } else {
-      console.error(`[MAIL] SMTP-Selbsttest FEHLGESCHLAGEN: Verbindung zu ${details.host}:${details.port} hat die Zeitueberschreitung erreicht (30s) – kein Antwort vom Server`);
+  const candidates = [
+    { transport: transporter, label: details.port || '587' },
+    { transport: fallbackTransporter, label: '465 (TLS)' },
+  ].filter((c) => c.transport);
+  let lastErr = null;
+  for (let i = 0; i < candidates.length; i++) {
+    const { transport, label } = candidates[i];
+    try {
+      // Sicherheitsnetz, damit der Start nicht hängen bleibt, falls der Server
+      // gar nicht antwortet. Der echte Fehler kommt trotzdem in den catch-Zweig.
+      const result = await Promise.race([
+        transport.verify().then(() => 'ok'),
+        new Promise((resolve) => setTimeout(() => resolve('timeout'), 30000)),
+      ]);
+      if (result === 'ok') {
+        console.log(`[MAIL] SMTP-Selbsttest OK: ${details.host}:${label} (User ${details.user}) erreichbar`);
+        return;
+      }
+      lastErr = new Error(`Zeitueberschreitung (30s) auf Port ${label}`);
+    } catch (err) {
+      lastErr = err;
     }
-  } catch (err) {
-    const code = err && err.code ? ` (${err.code})` : '';
-    const cmd = err && err.command ? ` Kommando=${err.command}` : '';
-    console.error(`[MAIL] SMTP-Selbsttest FEHLGESCHLAGEN: ${err.message}${code}${cmd}`);
+    if (i < candidates.length - 1) {
+      console.warn(`[MAIL] SMTP-Selbsttest: ${details.host}:${label} nicht erreichbar – versuche Fallback ${candidates[i + 1].label}`);
+    }
   }
+  const code = lastErr && lastErr.code ? ` (${lastErr.code})` : '';
+  const cmd = lastErr && lastErr.command ? ` Kommando=${lastErr.command}` : '';
+  console.error(`[MAIL] SMTP-Selbsttest FEHLGESCHLAGEN: Verbindung zu ${details.host} (Ports ${candidates.map((c) => c.label).join(' / ')}) hat die Zeitueberschreitung erreicht (30s) – kein Antwort vom Server${code}${cmd}`);
 }
 
 module.exports = {
