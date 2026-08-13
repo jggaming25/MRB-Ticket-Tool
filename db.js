@@ -185,12 +185,22 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
+  -- Ticket-Transkript: wird beim Schliessen gespeichert (Gespraechsverlauf +
+  -- Audit), damit die Ticketbearbeiter es jederzeit herunterladen koennen.
+  CREATE TABLE IF NOT EXISTS ticket_transcripts (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticket_id  INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+    content    TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
   CREATE INDEX IF NOT EXISTS idx_tickets_user ON tickets(user_id);
   CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets(status);
   CREATE INDEX IF NOT EXISTS idx_messages_ticket ON messages(ticket_id);
   CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
   CREATE INDEX IF NOT EXISTS idx_support_calls_status ON support_calls(status);
   CREATE INDEX IF NOT EXISTS idx_call_recordings_created ON call_recordings(created_at);
+  CREATE INDEX IF NOT EXISTS idx_ticket_transcripts_ticket ON ticket_transcripts(ticket_id);
 `);
 
 // Sanfte Migration fuer bestehende Datenbanken (neue Spalten ergaenzen).
@@ -485,6 +495,20 @@ function logTicketAction(ticketId, actorId, action, details = null) {
   `).run(ticketId, actorId, action, details);
 }
 
+// Transkript eines Tickets speichern (beim Schliessen). Ein aelteres
+// Transkript desselben Tickets wird dabei ersetzt.
+function saveTicketTranscript(ticketId, content) {
+  db.prepare('DELETE FROM ticket_transcripts WHERE ticket_id = ?').run(ticketId);
+  db.prepare('INSERT INTO ticket_transcripts (ticket_id, content) VALUES (?, ?)').run(ticketId, content);
+}
+
+function getTicketTranscript(ticketId) {
+  const row = db.prepare(`
+    SELECT content FROM ticket_transcripts WHERE ticket_id = ? ORDER BY id DESC LIMIT 1
+  `).get(ticketId);
+  return row ? row.content : null;
+}
+
 function addAccountNote(accountId, authorId, note) {
   db.prepare(`
     INSERT INTO account_notes (account_id, author_id, note)
@@ -505,4 +529,6 @@ module.exports = {
   logActionLabel,
   migrateLogActions,
   addAccountNote,
+  saveTicketTranscript,
+  getTicketTranscript,
 };

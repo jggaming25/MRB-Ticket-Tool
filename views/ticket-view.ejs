@@ -31,8 +31,12 @@
           </form>
         <% } %>
         <% if (canClose) { %>
+          <% const closeWarn = ticket.status === 'release'
+               ? 'Ticket wirklich schließen? Nur der Inhaber kann das rückgängig machen.'
+               : '⚠️ Dieses Ticket wurde NICHT vom Bearbeiter zur Freigabe vorgelegt. Trotzdem schließen?'; %>
           <form method="post" action="/tickets/<%= ticket.id %>/close?ctx=admin" class="inline-form"
-                data-confirm="Ticket wirklich schließen? Nur der Inhaber kann das rückgängig machen.">
+                data-force-confirm="<%= closeWarn %>">
+            <input type="hidden" name="force" value="0">
             <button type="submit" class="btn btn-danger">Ticket schließen</button>
           </form>
         <% } %>
@@ -42,6 +46,7 @@
             <button type="submit" class="btn btn-primary">Wieder öffnen</button>
           </form>
         <% } %>
+        <a class="btn btn-ghost" href="/tickets/<%= ticket.id %>/transcript">⬇ Transkript</a>
       </div>
     <% } %>
   </div>
@@ -70,6 +75,11 @@
             Dieses Ticket wurde von <strong><%= claimedBy.global_name || claimedBy.username %></strong> übernommen und wird gerade bearbeitet.
           </div>
         <% } %>
+        <% if (isHR || user.id === ticket.user_id) { %>
+          <div class="meta-row mrb-lockable" style="margin-top: 10px;">
+            <a class="btn btn-ghost btn-sm" href="/tickets/<%= ticket.id %>/transcript">⬇ Transkript herunterladen</a>
+          </div>
+        <% } %>
       </div>
 
       <% if (fromAdmin && isHR && !isHRHR && ticket.status !== 'closed') { %>
@@ -86,7 +96,7 @@
           <% const isOwnerMsg = m.user_id === ticket.user_id; %>
           <div class="msg <%= m.is_system ? 'msg-system' : (isOwnerMsg ? 'msg-owner' : 'msg-staff') %>" id="msg-<%= m.id %>">
             <% if (!m.is_system) { %>
-              <img class="msg-avatar" src="<%= m.avatar ? 'https://cdn.discordapp.com/avatars/' + m.discord_id + '/' + m.avatar + '.png?size=64' : '/static/img/placeholder.svg' %>" alt="" data-fallback="/static/img/placeholder.svg">
+              <img class="msg-avatar" src="<%= avatarUrl(m.avatar, m.discord_id) %>" alt="" data-fallback="/static/img/placeholder.svg">
             <% } %>
             <div class="msg-body">
               <% if (!m.is_system) { %>

@@ -71,7 +71,7 @@ global.fetch = async (url, opts = {}) => {
 
 // /auth/discord erzeugt zufaelligen State
 const { app, sessionStore } = require('./server');
-const { db, getSetting, migrateLogActions, logActionLabel } = require('./db');
+const { db, getSetting, migrateLogActions, logActionLabel, getTicketTranscript } = require('./db');
 const config = require('./config');
 const pushModule = require('./push');
 
@@ -437,6 +437,33 @@ function findMail(subjectPart) {
   ok('Inhaber: wieder geoeffnet', r.status === 302);
   const reopened2 = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId);
   ok('Reopen: Status open', reopened2.status === 'open');
+
+  // Inhaber ohne Freigabe: ohne Bestaetigung (force) abgelehnt, mit force=1 geschlossen
+  r = await post(ticketUrl + '/close', {}, hrhrCookie);
+  const noForce = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId);
+  ok('Inhaber: Schliessen ohne Freigabe ohne Bestaetigung abgelehnt', r.status === 302 && noForce.status === 'open', `status=${noForce.status}`);
+  r = await post(ticketUrl + '/close', { force: '1' }, hrhrCookie);
+  const forceClosed = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId);
+  ok('Inhaber: Schliessen ohne Freigabe mit Bestaetigung (force)', r.status === 302 && forceClosed.status === 'closed', `status=${forceClosed.status}`);
+
+  // Transkript: wird beim Schliessen gespeichert und ist jederzeit abrufbar
+  r = await get(ticketUrl + '/transcript', hrhrCookie);
+  ok('Transkript: Inhaber kann Transkript herunterladen',
+    r.status === 200 && r.headers.get('content-type') && r.headers.get('content-type').includes('text/plain')
+    && r.body.includes('TICKET-TRANSKRIPT'), `status=${r.status}`);
+  ok('Transkript: enthaelt Ticketnummer und Nachrichtenverlauf',
+    r.body.includes(`#${String(closedTicket.number).padStart(4, '0')}`) && r.body.includes('Alles geloest!') && r.body.includes('NACHRICHTENVERLAUF'));
+  r = await get(ticketUrl + '/transcript', hrCookie);
+  ok('Transkript: HR (Bearbeiter) kann Transkript herunterladen', r.status === 200 && r.body.includes('TICKET-TRANSKRIPT'));
+  r = await get(ticketUrl + '/transcript', strangerCookie);
+  ok('Transkript: fremder normaler Nutzer abgewiesen (403)', r.status === 403);
+  const storedTranscript = getTicketTranscript(ticketId);
+  ok('Transkript: Modul liefert gespeichertes Transkript', !!storedTranscript && storedTranscript.includes('TICKET-TRANSKRIPT'));
+
+  // Wieder oeffnen, damit die nachfolgenden Status-/Faelligkeits-Tests ein offenes Ticket haben
+  r = await post(ticketUrl + '/reopen', {}, hrhrCookie);
+  const reopened3 = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId);
+  ok('Inhaber: nach Transkript wieder geoeffnet', r.status === 302 && reopened3.status === 'open', `status=${reopened3.status}`);
 
   // Manueller Statuswechsel durch Bearbeiter
   r = await post(`/admin/tickets/${ticketId}/status`, { status: 'pending' }, hrCookie);

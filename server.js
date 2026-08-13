@@ -11,7 +11,7 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const multer = require('multer');
 
-const { db, isRemote, DB_PATH: dbPaths, nextTicketNumber, insertSystemMessage, logAccountAction, logTicketAction, logActionLabel, addAccountNote, getSetting, setSetting } = require('./db');
+const { db, isRemote, DB_PATH: dbPaths, nextTicketNumber, insertSystemMessage, logAccountAction, logTicketAction, logActionLabel, addAccountNote, getSetting, setSetting, saveTicketTranscript, getTicketTranscript } = require('./db');
 const discord = require('./discord');
 const mailer = require('./mailer');
 const config = require('./config');
@@ -183,6 +183,7 @@ app.use((req, res, next) => {
   res.locals.isOverdue = isOverdue;
   res.locals.accountStatusLabel = (s) => STATUS_LABELS[s] || s;
   res.locals.logActionLabel = logActionLabel;
+  res.locals.avatarUrl = avatarUrl;
   res.locals.lockdown = getLockdown();
   res.locals.itAlarm = getAlarm();
   res.locals.fmtDate = (iso) => {
@@ -392,6 +393,85 @@ function normalizeLogRows(rows) {
     if (r && r.ACTION !== undefined && r.action === undefined) r.action = r.ACTION;
     return r;
   });
+}
+
+// Discord-Profilbild: animierte Avatare (Hash beginnt mit "a_") brauchen die
+// .gif-Variante, sonst liefert Discord kein Bild. Ohne Avatar/Hash -> Platzhalter.
+function avatarUrl(avatar, discordId) {
+  if (!avatar || !discordId) return '/static/img/placeholder.svg';
+  const ext = String(avatar).startsWith('a_') ? 'gif' : 'png';
+  return `https://cdn.discordapp.com/avatars/${discordId}/${avatar}.${ext}?size=64`;
+}
+
+// Datum/Uhrzeit fuer das Text-Transkript (deutsche Darstellung).
+function fmtDateTranscript(iso) {
+  if (!iso) return '–';
+  const d = new Date(iso.endsWith('Z') ? iso : iso.replace(' ', 'T') + 'Z');
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString('de-DE', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Europe/Berlin' });
+}
+
+// Erzeugt ein lesbares Text-Transkript (Nachrichtenverlauf + Audit) fuer ein
+// Ticket. Wird beim Schliessen gespeichert und beim Download bei Bedarf neu
+// generiert.
+function generateTicketTranscript(ticketId) {
+  const t = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId);
+  if (!t) return null;
+  const owner = t.user_id ? db.prepare('SELECT username, global_name FROM users WHERE id = ?').get(t.user_id) : null;
+  const claimer = t.claimed_by ? db.prepare('SELECT username, global_name FROM users WHERE id = ?').get(t.claimed_by) : null;
+  const messages = db.prepare(`
+    SELECT m.*, u.username, u.global_name
+    FROM messages m LEFT JOIN users u ON u.id = m.user_id
+    WHERE m.ticket_id = ?
+    ORDER BY m.created_at ASC, m.id ASC
+  `).all(ticketId);
+  const logs = normalizeLogRows(db.prepare(`
+    SELECT l.*, a.username AS actor_name, a.global_name AS actor_global
+    FROM ticket_logs l LEFT JOIN users a ON a.id = l.actor_id
+    WHERE l.ticket_id = ?
+    ORDER BY l.id ASC
+  `).all(ticketId));
+
+  const line = (s) => lines.push(String(s));
+  const lines = [];
+  line('='.repeat(62));
+  line('TICKET-TRANSKRIPT / PROTOKOLL');
+  line('='.repeat(62));
+  line(`Ticket-Nummer:  #${String(t.number).padStart(4, '0')}`);
+  line(`Betreff:         ${t.subject || '–'}`);
+  line(`Kategorie:       ${t.category || '–'}`);
+  line(`Prioritaet:      ${priorityLabel(t.priority)}`);
+  line(`Status:          ${statusLabel(t.status)}`);
+  line(`Erstellt von:    ${owner ? (owner.global_name || owner.username) : '–'}`);
+  line(`Erstellt am:     ${fmtDateTranscript(t.created_at)}`);
+  if (claimer) line(`Bearbeiter:      ${claimer.global_name || claimer.username}`);
+  if (t.due_at) line(`Faellig:         ${fmtDateTranscript(t.due_at)}`);
+  if (t.closed_at) line(`Geschlossen am:  ${fmtDateTranscript(t.closed_at)}`);
+  line('');
+  line('-'.repeat(62));
+  line('NACHRICHTENVERLAUF');
+  line('-'.repeat(62));
+  for (const m of messages) {
+    const author = m.is_system ? 'System'
+      : (m.global_name || m.username || (m.author_role === 'staff' ? 'Support' : 'Kunde'));
+    const role = m.is_system ? 'System' : (m.author_role === 'staff' ? 'Support' : 'Kunde');
+    line(`[${fmtDateTranscript(m.created_at)}] ${role}${author !== role && author !== 'System' ? ` – ${author}` : ''}`);
+    line((m.body || '(Anhang)').replace(/\r\n/g, '\n'));
+    if (m.attachment_name) line(`  (Anhang: ${m.attachment_name})`);
+    line('');
+  }
+  line('-'.repeat(62));
+  line('AKTIVITAETSPROTOKOLL (AUDIT)');
+  line('-'.repeat(62));
+  for (const l of logs) {
+    const actor = l.actor_global || l.actor_name || 'System';
+    line(`[${fmtDateTranscript(l.created_at)}] ${actor} – ${logActionLabel(l.action, l.details)}${l.details ? ` (${l.details})` : ''}`);
+  }
+  line('');
+  line('='.repeat(62));
+  line('ENDE DES PROTOKOLLS');
+  line('='.repeat(62));
+  return lines.join('\n');
 }
 
 // ---- Homepage-Bilder -------------------------------------------------------
@@ -1284,8 +1364,10 @@ app.get('/tickets/:id', requireLogin, loadTicketFor, (req, res) => {
       ['open', 'pending', 'overdue'].includes(ticket.status),
     canSetDue: fromAdmin && canEdit && !isClosed,
     // Schließen: nur Inhaber (HR-HR) und nur, wenn der Bearbeiter das Ticket
-    // zur Freigabe vorgelegt hat (Status "release").
-    canClose: fromAdmin && isHRHR(req.user) && !isClosed && ticket.status === 'release',
+  // Der Inhaber kann jedes offene Ticket schliessen. Tickets, die der
+  // Bearbeiter zur Freigabe vorgelegt hat (Status "release"), schliesst er
+  // direkt; ohne Freigabe ist eine ausdrueckliche Bestaetigung noetig.
+  canClose: fromAdmin && isHRHR(req.user) && !isClosed,
     canReopen: fromAdmin && isHRHR(req.user) && isClosed,
     lockBlocked,
     lockHolderName: lockOwnerInfo ? (lockOwnerInfo.global_name || lockOwnerInfo.username) : null,
@@ -1367,8 +1449,11 @@ app.post('/tickets/:id/message', requireLogin, loadTicketFor, upload.single('att
   res.redirect(ticketViewUrl(ticket, adminCtx) + '#last');
 });
 
-// Schließen: ausschliesslich HR-HR und nur, wenn der Bearbeiter das Ticket
-// zur Freigabe vorgelegt hat (Status "release").
+// Schließen: ausschliesslich Inhaber (HR-HR). Ein Ticket, das der Bearbeiter
+// zur Freigabe vorgelegt hat (Status "release"), kann jeder Inhaber direkt
+// schliessen. Ohne Freigabe ist eine ausdrueckliche Bestaetigung (force=1,
+// clientseitige Meldung) erforderlich. Beim Schliessen wird das Transkript
+// gespeichert.
 app.post('/tickets/:id/close', requireHRHR, loadTicketFor, async (req, res) => {
   const { ticket } = req;
   const adminCtx = req.query.ctx === 'admin';
@@ -1376,9 +1461,10 @@ app.post('/tickets/:id/close', requireHRHR, loadTicketFor, async (req, res) => {
     flash(req, 'error', 'Das Ticket ist bereits geschlossen.');
     return res.redirect(ticketViewUrl(ticket, adminCtx));
   }
-  if (ticket.status !== 'release') {
+  const released = ticket.status === 'release';
+  if (!released && req.body.force !== '1') {
     flash(req, 'error',
-      'Das Ticket wurde nicht vom Bearbeiter zur Freigabe vorgelegt. Nur Tickets mit Freigabe-Status können geschlossen werden.');
+      'Das Ticket wurde nicht vom Bearbeiter zur Freigabe vorgelegt. Bitte die Schliessung ueber die Bestaetigungsmeldung bestaetigen.');
     return res.redirect(ticketViewUrl(ticket, adminCtx));
   }
   const now = new Date().toISOString();
@@ -1386,11 +1472,32 @@ app.post('/tickets/:id/close', requireHRHR, loadTicketFor, async (req, res) => {
     UPDATE tickets SET status = 'closed', closed_at = ?, closed_by = ?, due_at = NULL, updated_at = ? WHERE id = ?
   `).run(now, req.user.id, now, ticket.id);
 
-  logTicketAction(ticket.id, req.user.id, 'closed', 'Ticket vom Inhaber geschlossen');
-  insertSystemMessage(ticket.id, 'Das Ticket wurde geschlossen.');
+  logTicketAction(ticket.id, req.user.id, 'closed',
+    released ? 'Ticket vom Inhaber geschlossen' : 'Ticket ohne Freigabe vom Inhaber geschlossen (bestaetigt)');
+  insertSystemMessage(ticket.id, released
+    ? 'Das Ticket wurde geschlossen.'
+    : 'Das Ticket wurde ohne Freigabe vom Inhaber geschlossen.');
+
+  const transcript = generateTicketTranscript(ticket.id);
+  if (transcript) saveTicketTranscript(ticket.id, transcript);
+
   await notifyCustomer(ticket, ticket.subject, 'Dein Ticket wurde erfolgreich abgeschlossen.');
   flash(req, 'success', 'Ticket geschlossen.');
   res.redirect(ticketViewUrl(ticket, adminCtx));
+});
+
+// Transkript-Download: fuer Ticketbearbeiter (HR/HR-HR) und den Ticket-Eigentümer.
+// Ein beim Schliessen gespeichertes Transkript wird bevorzugt; ansonsten wird
+// der Verlauf live generiert (z. B. fuer noch offene Tickets).
+app.get('/tickets/:id/transcript', requireLogin, loadTicketFor, (req, res) => {
+  let content = getTicketTranscript(req.ticket.id);
+  if (!content) content = generateTicketTranscript(req.ticket.id);
+  if (!content) return renderError(res, 404, 'Nicht gefunden', 'Kein Transkript verfuegbar.');
+  const filename = `ticket-${String(req.ticket.number).padStart(4, '0')}-transkript.txt`;
+  res.set('Content-Type', 'text/plain; charset=utf-8');
+  res.set('Content-Disposition',
+    `attachment; filename="${filename}"; filename*=UTF-8''${encodeURIComponent(filename)}`);
+  res.send(content);
 });
 
 // Wieder öffnen: nur HR-HR
