@@ -151,4 +151,50 @@
           setInterval(check, 3000);
         })();
       </script>
+    <% } else { %>
+      <script>
+        // IT-Alarm für anonyme Besucher: Sobald der Inhaber den IT-Alarm
+        // auslöst, verlieren auch nicht eingeloggte Besucher den Zugriff –
+        // nach 4 Sekunden geht es zur Login-Seite mit der Sperrmeldung.
+        // Login-Seite, Impressum/Datenschutz, statische Dateien und der
+        // Status-Endpoint bleiben erreichbar.
+        (function () {
+          var path = window.location.pathname;
+          if (path === '/login' || path === '/impressum' || path === '/datenschutz' ||
+              path === '/sw.js' || path === '/api/status' || path === '/auth/discord' ||
+              path.indexOf('/static/') === 0 || path.indexOf('/auth/') === 0) return;
+          var shown = false;
+          function check() {
+            fetch('/api/status', { cache: 'no-store' })
+              .then(function (r) { return r.json(); })
+              .then(function (s) {
+                var enabled = !!(s && s.lockdown && s.lockdown.enabled);
+                if (!enabled || shown) return;
+                shown = true;
+                var msg = s.lockdown.message || 'Der Zugriff wurde für alle Bearbeiter gesperrt.';
+                var ov = document.createElement('div');
+                ov.id = 'it-alarm-overlay';
+                var box = document.createElement('div');
+                box.className = 'it-alarm-box';
+                var h = document.createElement('h1');
+                h.textContent = 'IT-Alarm';
+                var p = document.createElement('p');
+                p.className = 'it-alarm-msg';
+                p.textContent = 'IT-Alarm: ' + msg;
+                var sub = document.createElement('p');
+                sub.className = 'it-alarm-sub';
+                sub.textContent = 'Zugriff gesperrt – Weiterleitung zur Anmeldung...';
+                box.appendChild(h);
+                box.appendChild(p);
+                box.appendChild(sub);
+                ov.appendChild(box);
+                document.body.appendChild(ov);
+                setTimeout(function () { window.location.href = '/login?locked=1'; }, 4000);
+              })
+              .catch(function () {});
+          }
+          check();
+          setInterval(check, 3000);
+        })();
+      </script>
     <% } %>

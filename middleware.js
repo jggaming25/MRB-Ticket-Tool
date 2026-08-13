@@ -170,23 +170,30 @@ function getAlarm() {
   }
 }
 
-// Zugriff für alle sperren (außer dem Inhaber): Sobald der Lockdown aktiv
-// ist, werden alle anderen Nutzer sofort ausgeloggt (Session zerstört) und
-// auf die Login-Seite mit Meldung geleitet. Öffentliche Seiten (Startseite,
-// Login, statische Dateien) bleiben erreichbar, damit die Meldung sichtbar ist.
+// Zugriff für alle sperren (außer dem festgelegten Inhaber): Sobald der
+// Lockdown aktiv ist, wird jeder eingeloggte Nicht-Inhaber sofort ausgeloggt
+// (Session zerstört) – egal auf welcher Seite (auch /login, damit ein Umweg
+// über die Login-Seite nicht die Session erhält). Öffentliche Seiten
+// (Startseite, Login, statische Dateien) bleiben für anonyme Besucher
+// erreichbar, damit die Sperrmeldung sichtbar ist; anonyme Besucher werden
+// zusätzlich clientseitig nach 4 s zur Login-Seite geleitet.
 function lockdownGuard(req, res, next) {
   if (req.path === '/healthz') return next();
   const lock = getLockdown();
   if (!lock) return next();
-  // Der festgelegte Inhaber (is_root) hat immer Zugriff.
+  // Der festgelegte Inhaber (is_root) hat immer Zugriff und bleibt eingeloggt.
   if (isRoot(req.user)) return next();
+  // Jeder eingeloggte Nicht-Inhaber verliert sofort den Zugriff.
+  if (req.user) {
+    req.session.destroy(() => {});
+    res.locals.user = null;
+    return res.redirect('/login?locked=1');
+  }
   // Öffentliche Seiten (Startseite, Login, statische Dateien) bleiben
   // erreichbar, damit die Sperrmeldung sichtbar ist.
   if (req.path === '/' || req.path === '/login' || req.path === '/sw.js' ||
       req.path === '/impressum' || req.path === '/datenschutz' || req.path === '/api/status' ||
       req.path.startsWith('/auth/') || req.path.startsWith('/static/')) return next();
-  req.session.destroy(() => {});
-  res.locals.user = null;
   return res.redirect('/login?locked=1');
 }
 

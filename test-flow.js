@@ -805,7 +805,7 @@ function findMail(subjectPart) {
   st = JSON.parse(r.body);
   ok('Support: Anrufer sieht Answer', st.ok === true && st.call.answer === 'v=0\r\no=staff');
 
-  // Kein Mitarbeiter verfuegbar -> nach fester Wartezeit endet der Anruf.
+  // Kein Mitarbeiter verfügbar -> Warteschleife läuft endlos weiter (kein Timeout).
   const secondCall = await postJson('/api/support/call/start', {}, lockUser);
   const s2 = JSON.parse(secondCall.body);
   ok('Support: zweiter Anrufer (kein freier HR) landet in Warteschlange', s2.ok === true && s2.call && s2.call.status === 'waiting');
@@ -813,7 +813,12 @@ function findMail(subjectPart) {
   const support = require('./support');
   support.runScheduler();
   const s2after = db.prepare('SELECT * FROM support_calls WHERE id = ?').get(s2.call.id);
-  ok('Support: ohne freien Mitarbeiter endet Warteschlange nach fester Wartezeit (timeout)', s2after.status === 'timeout');
+  ok('Support: ohne freien Mitarbeiter bleibt die Warteschleife aktiv (kein Timeout)', s2after.status === 'waiting', `status=${s2after.status}`);
+
+  // Ansage-Intervall + freie Mitarbeiter werden an den Client geliefert.
+  r = await get(`/api/support/call/${s2.call.id}`, lockUser);
+  st = JSON.parse(r.body);
+  ok('Support: Anruf-Zustand liefert Position + freie Mitarbeiter', st.ok === true && typeof st.call.queuePosition === 'number' && typeof st.call.availableStaff === 'number');
 
   // Anruf beenden (Anrufer)
   r = await postJson('/api/support/call/end', { callId }, userCookie);
@@ -827,14 +832,14 @@ function findMail(subjectPart) {
   ok('Support: Staff-State zeigt ausgestempelten HR', st.clockedIn === false);
 
   // Voice-Support-Einstellungen nur für den Inhaber
-  r = await post('/account/settings/admin/support', { waitMaxMs: '90', ringTimeoutMs: '30' }, userCookie);
+  r = await post('/account/settings/admin/support', { announcementIntervalMs: '90', ringTimeoutMs: '30' }, userCookie);
   ok('Support: Einstellungen fuer normale Nutzer verweigert (403)', r.status === 403);
 
-  r = await post('/account/settings/admin/support', { waitMaxMs: '90', ringTimeoutMs: '30', hotlinePrefix: '0900', noStaffMessage: 'Bitte später erneut versuchen.', queueEstimateLabel: 'Wartezeit 2 Minuten.', stunServers: 'stun:stun.l.google.com:19302' }, hrhrCookie);
+  r = await post('/account/settings/admin/support', { announcementIntervalMs: '90', ringTimeoutMs: '30', hotlinePrefix: '0900', noStaffMessage: 'Bitte später erneut versuchen.', queueEstimateLabel: 'Wartezeit 2 Minuten.', stunServers: 'stun:stun.l.google.com:19302' }, hrhrCookie);
   ok('Support: Inhaber speichert Einstellungen', r.status === 302);
 
   const savedSupport = JSON.parse(getSetting('support_settings'));
-  ok('Support: Wartezeit gespeichert (90 s -> 90000 ms)', savedSupport.waitMaxMs === 90000);
+  ok('Support: Ansage-Intervall gespeichert (90 s -> 90000 ms)', savedSupport.announcementIntervalMs === 90000);
   ok('Support: Klingelzeit gespeichert (30 s -> 30000 ms)', savedSupport.ringTimeoutMs === 30000);
   ok('Support: Vorwahl gespeichert', savedSupport.hotlinePrefix === '0900');
 
@@ -842,9 +847,9 @@ function findMail(subjectPart) {
   ok('Support: Hotline-Nummer nach Vorwahl-Wechsel neu erzeugt', newHotline.startsWith('0900'));
 
   // zuruecksetzen auf Standardwerte
-  await post('/account/settings/admin/support', { waitMaxMs: '120', ringTimeoutMs: '45', hotlinePrefix: '0800' }, hrhrCookie);
+  await post('/account/settings/admin/support', { announcementIntervalMs: '30', ringTimeoutMs: '45', hotlinePrefix: '0800' }, hrhrCookie);
   const reverted = JSON.parse(getSetting('support_settings'));
-  ok('Support: Standardwerte wiederhergestellt', reverted.waitMaxMs === 120000 && reverted.ringTimeoutMs === 45000);
+  ok('Support: Standardwerte wiederhergestellt', reverted.announcementIntervalMs === 30000 && reverted.ringTimeoutMs === 45000);
 
   const logoutRes = await fetch(base + '/auth/logout', {
     method: 'POST', headers: { cookie: userCookie }, redirect: 'manual',

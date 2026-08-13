@@ -18,6 +18,7 @@ const config = require('./config');
 const push = require('./push');
 const backups = require('./backups');
 const support = require('./support');
+const whatsapp = require('./whatsapp');
 const {
   loadUser,
   requireLogin,
@@ -299,6 +300,14 @@ function notifyAllStaffPush(title, body, url, excludeUserId) {
   for (const s of staff) {
     if (excludeUserId && s.id === excludeUserId) continue;
     push.sendToUser(s.id, { title, body, url });
+  }
+}
+
+// WhatsApp-Benachrichtigung bei generellen Änderungen (neue Tickets, Antworten,
+// Übernahmen, Freigaben) an die in WHATSAPP_PHONE hinterlegte Nummer.
+function notifyChangesWhatsApp(text) {
+  if (whatsapp.isConfigured()) {
+    whatsapp.sendMessage(text);
   }
 }
 
@@ -598,10 +607,14 @@ app.post('/account/settings/admin/lockdown', requireRoot, (req, res) => {
       set_at: new Date().toISOString(),
     }));
     logAccountAction(req.user.id, req.user.id, 'lockdown_enabled', 'IT-Alarm ausgelöst (Zugriff für alle Bearbeiter gesperrt, nur Inhaber darf einloggen).');
+    const who = req.user.global_name || req.user.username;
+    whatsapp.sendMessage(`🚨 IT-ALARM ausgelöst von ${who}: ${message}`);
     flash(req, 'success', 'IT-Alarm ausgelöst. Alle eingeloggten Bearbeiter sehen die rote Meldung und werden abgemeldet.');
   } else {
     setSetting('system_lockdown', '');
     logAccountAction(req.user.id, req.user.id, 'lockdown_disabled', 'IT-Alarm beendet, Zugriff für Bearbeiter wieder freigegeben.');
+    const who = req.user.global_name || req.user.username;
+    whatsapp.sendMessage(`✅ IT-Alarm beendet von ${who}. Der Zugriff ist wieder für alle möglich.`);
     flash(req, 'success', 'IT-Alarm beendet. Der Zugriff ist wieder für alle möglich.');
   }
   res.redirect('/account/settings');
@@ -637,7 +650,7 @@ app.post('/account/settings/admin/support', requireRoot, (req, res) => {
   const s = (v) => { const n = Number(v); return Number.isFinite(n) ? String(Math.round(n)) : ''; };
   const result = support.saveSettings({
     // UI-Eingabe in Sekunden, Speicherung intern in Millisekunden
-    waitMaxMs: s(req.body.waitMaxMs) !== '' ? String(Number(s(req.body.waitMaxMs)) * 1000) : '',
+    announcementIntervalMs: s(req.body.announcementIntervalMs) !== '' ? String(Number(s(req.body.announcementIntervalMs)) * 1000) : '',
     ringTimeoutMs: s(req.body.ringTimeoutMs) !== '' ? String(Number(s(req.body.ringTimeoutMs)) * 1000) : '',
     pollMs: s(req.body.pollMs) !== '' ? String(Number(s(req.body.pollMs)) * 1000) : '',
     hotlinePrefix: req.body.hotlinePrefix,
@@ -751,11 +764,11 @@ const supportApiLimiter = rateLimit({
 });
 
 app.get('/support', requireLogin, (req, res) => {
-  res.render('support', { title: 'Voice-Support', staff: false, pollMs: support.getSettings().pollMs });
+  res.render('support', { title: 'Voice-Support', staff: false, pollMs: support.getSettings().pollMs, announcementIntervalMs: support.getSettings().announcementIntervalMs });
 });
 
 app.get('/support/staff', requireLogin, requireHR, (req, res) => {
-  res.render('support', { title: 'Voice-Support – Mitarbeiter', staff: true, pollMs: support.getSettings().pollMs });
+  res.render('support', { title: 'Voice-Support – Mitarbeiter', staff: true, pollMs: support.getSettings().pollMs, announcementIntervalMs: support.getSettings().announcementIntervalMs });
 });
 
 // Öffentlicher Status der Hotline (Hotline-Nummer, freie Mitarbeiter).
@@ -1074,6 +1087,7 @@ app.post('/tickets', requireLogin, ticketCreateLimiter, upload.single('attachmen
   notifyAllStaffPush(`Neues Ticket #${String(number).padStart(4, '0')}`,
     `Von ${req.user.global_name || req.user.username}: ${subjectTrim.slice(0, 100)}`,
     `${BASE_URL}/tickets/${ticketId}`, req.user.id);
+  notifyChangesWhatsApp(`🆕 Neues Ticket #${String(number).padStart(4, '0')} von ${req.user.global_name || req.user.username}: ${subjectTrim.slice(0, 100)}`);
 
   res.redirect(`/tickets/${ticketId}`);
 });
@@ -1224,6 +1238,7 @@ app.post('/tickets/:id/message', requireLogin, loadTicketFor, upload.single('att
       `Neue Nachricht vom Kunden (${who}): ${snippet}`,
       `${BASE_URL}/tickets/${ticket.id}`);
   }
+  notifyChangesWhatsApp(`${isStaff ? '📩 Antwort' : '💬 Kundenantwort'} auf #${String(ticket.number).padStart(4, '0')} von ${who}: ${snippet}`);
 
   res.redirect(ticketViewUrl(ticket, adminCtx) + '#last');
 });
@@ -1424,6 +1439,7 @@ app.post('/admin/tickets/:id/claim', requireHR, (req, res) => {
   notifyAllStaffPush(`Ticket #${String(ticket.number).padStart(4, '0')}`,
     `Übernommen von ${who}`,
     `${BASE_URL}/tickets/${ticket.id}`, req.user.id);
+  notifyChangesWhatsApp(`📥 Ticket #${String(ticket.number).padStart(4, '0')} übernommen von ${who}`);
   flash(req, 'success', 'Ticket uebernommen. Nur du kannst es jetzt bearbeiten.');
   res.redirect(ticketViewUrl(ticket, true));
 });
@@ -1576,6 +1592,7 @@ app.post('/admin/tickets/:id/release', requireHR, loadTicketFor, async (req, res
   notifyAllStaffPush(`Ticket #${String(ticket.number).padStart(4, '0')}`,
     `Zur Freigabe vorgelegt von ${req.user.global_name || req.user.username}`,
     `${BASE_URL}/tickets/${ticket.id}`, req.user.id);
+  notifyChangesWhatsApp(`📤 Ticket #${String(ticket.number).padStart(4, '0')} zur Freigabe vorgelegt von ${req.user.global_name || req.user.username}`);
   flash(req, 'success', 'Ticket zur Freigabe vorgelegt. Der Inhaber entscheidet über das Schließen.');
   res.redirect(ticketViewUrl(ticket, true));
 });

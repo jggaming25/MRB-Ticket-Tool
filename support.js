@@ -7,8 +7,9 @@
 // (support_shifts). Eingeloggte Nutzer können die Hotline über die Website
 // "anrufen" (support_calls): Der Anruf landet in der Warteschleife, wird
 // automatisch einem verfügbaren Mitarbeiter zugewiesen und über WebRTC als
-// Sprachanruf verbunden. Ist innerhalb der festen Wartezeit kein Mitarbeiter
-// verfügbar, endet der Anruf mit einer professionellen Hinweis-Meldung.
+// Sprachanruf verbunden. Die Warteschleife läuft ohne festes Zeitlimit – der
+// Anrufer bleibt in der Musik (mit KI-Ansagen in DE/EN) bis ein Mitarbeiter
+// frei wird oder er selbst auflegt.
 // ---------------------------------------------------------------------------
 
 const { db, getSetting, setSetting, logAccountAction } = require('./db');
@@ -38,7 +39,7 @@ function getSettings() {
     return {
       ...d,
       ...o,
-      waitMaxMs: toPositiveInt(o.waitMaxMs, d.waitMaxMs, 10000, 600000),
+      announcementIntervalMs: toPositiveInt(o.announcementIntervalMs, d.announcementIntervalMs, 5000, 600000),
       ringTimeoutMs: toPositiveInt(o.ringTimeoutMs, d.ringTimeoutMs, 5000, 120000),
       pollMs: toPositiveInt(o.pollMs, d.pollMs, 1000, 60000),
       hotlinePrefix: String(o.hotlinePrefix || d.hotlinePrefix).trim(),
@@ -76,9 +77,9 @@ function saveSettings(input) {
   const errors = [];
   const number = (v) => String(v == null ? '' : v).trim();
 
-  const waitMaxMs = toPositiveInt(input.waitMaxMs, d.waitMaxMs, 10000, 600000);
-  if (input.waitMaxMs != null && String(input.waitMaxMs).trim() !== '' && Number(input.waitMaxMs) !== waitMaxMs) {
-    errors.push('Wartezeit: zwischen 10 und 600 Sekunden.');
+  const announcementIntervalMs = toPositiveInt(input.announcementIntervalMs, d.announcementIntervalMs, 5000, 600000);
+  if (input.announcementIntervalMs != null && String(input.announcementIntervalMs).trim() !== '' && Number(input.announcementIntervalMs) !== announcementIntervalMs) {
+    errors.push('Ansage-Intervall: zwischen 5 und 600 Sekunden.');
   }
   const ringTimeoutMs = toPositiveInt(input.ringTimeoutMs, d.ringTimeoutMs, 5000, 120000);
   if (input.ringTimeoutMs != null && String(input.ringTimeoutMs).trim() !== '' && Number(input.ringTimeoutMs) !== ringTimeoutMs) {
@@ -99,7 +100,7 @@ function saveSettings(input) {
   const stunServers = stunInput.length ? stunInput : d.stunServers;
 
   const payload = {
-    waitMaxMs,
+    announcementIntervalMs,
     ringTimeoutMs,
     pollMs,
     hotlinePrefix,
@@ -375,6 +376,7 @@ function callStateFor(userId, callId) {
       endedAt: call.ended_at,
       endedReason: call.ended_reason,
       queuePosition: call.status === 'waiting' ? queuePositionOf(call.id) : null,
+      availableStaff: availableStaffCount(),
       offer: isStaff ? call.offer_caller : null,
       answer: isCaller ? call.answer_staff : null,
       role: isCaller ? 'caller' : 'staff',
@@ -391,7 +393,7 @@ function publicState(user) {
   return {
     hotline: hotlineNumber(),
     available: availableStaffCount(),
-    waitMaxMs: settings.waitMaxMs,
+    announcementIntervalMs: settings.announcementIntervalMs,
     ringTimeoutMs: settings.ringTimeoutMs,
     pollMs: settings.pollMs,
     queueEstimateLabel: settings.queueEstimateLabel,
@@ -419,7 +421,7 @@ function staffState(user) {
     myCall: handled ? { id: handled.id, display: callDisplayNumber(handled.id), status: handled.status, callerName: null } : null,
     queue,
     history: shiftHistory(user.id),
-    waitMaxMs: settings.waitMaxMs,
+    announcementIntervalMs: settings.announcementIntervalMs,
     ringTimeoutMs: settings.ringTimeoutMs,
     pollMs: settings.pollMs,
     noStaffMessage: settings.noStaffMessage,
@@ -427,34 +429,18 @@ function staffState(user) {
 }
 
 // ---------------------------------------------------------------------------
-// Scheduler: feste Wartezeiten durchsetzen (läuft zyklisch im Server).
+// Scheduler (läuft zyklisch im Server).
+// Es gibt KEINE feste Wartezeit mehr: Anrufer bleiben in der Warteschleife,
+// bis ein Mitarbeiter frei wird oder sie selbst auflegen. Ein zugewiesener
+// Mitarbeiter, der nicht rechtzeitig annimmt (Klingelzeit), gibt den Anruf
+// zurück in die Warteschlange, damit ihn der nächste freie Mitarbeiter
+// übernehmen kann.
 // ---------------------------------------------------------------------------
 function runScheduler() {
   const settings = getSettings();
   const now = Date.now();
 
-  // Wartend ohne Mitarbeiter nach Ablauf der festen Wartezeit -> beenden.
-  const timeouts = db.prepare(`
-    SELECT * FROM support_calls WHERE status = 'waiting'
-  `).all();
-  for (const call of timeouts) {
-    const joined = new Date(call.joined_at).getTime();
-    if (!Number.isNaN(joined) && now - joined >= settings.waitMaxMs) {
-      endCallInternal(call.id, 'timeout', settings.noStaffMessage);
-      // Anrufer per Push informieren, dass gerade kein Mitarbeiter verfügbar ist.
-      try {
-        if (push.isConfigured()) {
-          push.sendToUser(call.caller_id, {
-            title: '📵 Kein Mitarbeiter verfügbar',
-            body: settings.noStaffMessage,
-            url: '/support',
-          });
-        }
-      } catch (e) { /* ignore */ }
-    }
-  }
-
-  // Zugeteilter Mitarbeiter nimmt nicht rechtzeitig an -> wieder in die Warteschlange.
+  // Zugeteilter Mitarbeiter nimmt nicht rechtzeitig an -> zurück in die Warteschlange.
   const ringing = db.prepare(`
     SELECT * FROM support_calls WHERE status = 'ringing'
   `).all();
