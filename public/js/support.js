@@ -55,37 +55,74 @@
   }
 
   // ---- Warteschleifenmusik & Signaltöne ------------------------------------
-  function WaitMusic() {
-    let ctx = null;
-    let timer = null;
+  // Echte Warteschleifen-Musik (24-s-Loop, generiert in tools/hold-music-gen.js).
+  // Fällt bei Audio-Fehlern auf einen sanften synthetischen Loop zurück.
+  function HoldMusic() {
+    let audio = null;
     let playing = false;
+    let synth = null;
+    const src = '/static/audio/hold-music.wav';
+
+    function startSynth() {
+      if (synth) return;
+      try {
+        synth = (function () {
+          const ctx = new (window.AudioContext || window.webkitAudioContext)();
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = 'sine';
+          gain.gain.value = 0.05;
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.start();
+          const notes = [523.25, 659.25, 783.99];
+          let i = 0;
+          const step = () => {
+            if (!playing) return;
+            osc.frequency.setValueAtTime(notes[i % notes.length], ctx.currentTime);
+            i++;
+            timer = setTimeout(step, 450);
+          };
+          let timer = setTimeout(step, 450);
+          return { ctx, osc, gain, timer };
+        })();
+      } catch (e) { /* Audio nicht verfügbar */ }
+    }
+
+    function stopSynth() {
+      if (synth) {
+        try {
+          clearTimeout(synth.timer);
+          synth.osc.stop();
+          synth.ctx.close();
+        } catch (e) { /* ignore */ }
+        synth = null;
+      }
+    }
+
     this.start = function () {
       if (playing) return;
       playing = true;
       try {
-        ctx = new (window.AudioContext || window.webkitAudioContext)();
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.type = 'sine';
-        gain.gain.value = 0.05;
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.start();
-        const notes = [523.25, 659.25, 783.99];
-        let i = 0;
-        const step = () => {
-          if (!playing) return;
-          osc.frequency.setValueAtTime(notes[i % notes.length], ctx.currentTime);
-          i++;
-          timer = setTimeout(step, 450);
-        };
-        step();
-      } catch (e) { /* Audio nicht verfügbar */ }
+        if (!audio) {
+          audio = new Audio(src);
+          audio.loop = true;
+          audio.volume = 0.4;
+        }
+        const p = audio.play();
+        if (p && typeof p.catch === 'function') {
+          p.catch(() => startSynth()); // z. B. Autoplay-Sperre beim Wiederaufnehmen
+        }
+      } catch (e) {
+        startSynth();
+      }
     };
     this.stop = function () {
       playing = false;
-      if (timer) clearTimeout(timer);
-      if (ctx) { try { ctx.close(); } catch (e) { /* ignore */ } ctx = null; }
+      try {
+        if (audio) { audio.pause(); audio.currentTime = 0; }
+      } catch (e) { /* ignore */ }
+      stopSynth();
     };
   }
 
@@ -359,7 +396,7 @@
   // =========================================================================
   // ANRUFER-SEITE (/support)
   // =========================================================================
-  const waitMusic = new WaitMusic();
+  const waitMusic = new HoldMusic();
   let callId = null;
   let offerSent = false;
   let streamReady = false;
