@@ -324,9 +324,34 @@
         autoGainControl: true,
       };
     },
+    // Immer das Standard-Mikrofon des genutzten Geräts verwenden. Es wird per
+    // enumerateDevices ermittelt (Gerät mit deviceId 'default') und explizit
+    // angefordert, damit der Anruf am Standard-Eingang bleibt. Scheitert die
+    // Auswahl, wird schrittweise auf die normale Anforderung bzw. auf
+    // { audio: true } (Browser-Standard) zurückgefallen.
+    async pickDefaultMicDeviceId() {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const input = devices.find((d) => d.kind === 'audioinput' && d.deviceId === 'default');
+        return input ? input.deviceId : null;
+      } catch (e) { return null; }
+    },
+    async openMicStream() {
+      const deviceId = await this.pickDefaultMicDeviceId();
+      const attempts = [];
+      if (deviceId) attempts.push({ audio: { ...this.audioConstraints(), deviceId: { exact: deviceId } } });
+      attempts.push({ audio: this.audioConstraints() });
+      attempts.push({ audio: true });
+      let lastErr = null;
+      for (const constraints of attempts) {
+        try { return await navigator.mediaDevices.getUserMedia(constraints); }
+        catch (e) { lastErr = e; }
+      }
+      throw lastErr || new Error('Kein Mikrofon-Zugriff');
+    },
     async getStream() {
       if (this.localStream) return this.localStream;
-      this.localStream = await navigator.mediaDevices.getUserMedia({ audio: this.audioConstraints() });
+      this.localStream = await this.openMicStream();
       if (this.muted) this.setMuted(true);
       return this.localStream;
     },
@@ -339,7 +364,7 @@
       if (!this.localStream) return;
       let newStream;
       try {
-        newStream = await navigator.mediaDevices.getUserMedia({ audio: this.audioConstraints() });
+        newStream = await this.openMicStream();
       } catch (e) {
         console.warn('Mikrofon mit geänderten Einstellungen konnte nicht neu geöffnet werden:', e);
         return;

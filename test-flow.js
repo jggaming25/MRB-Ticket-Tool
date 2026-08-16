@@ -902,6 +902,11 @@ function findMail(subjectPart) {
     && r.body.includes('autoGainControl')
     && r.body.includes('replaceTrack')
     && r.body.includes('staffNoiseBtn'));
+  ok('Support: Immer das Standard-Mikrofon des Geraets (default + Fallback)',
+    r.body.includes('pickDefaultMicDeviceId')
+    && r.body.includes("deviceId === 'default'")
+    && r.body.includes('openMicStream')
+    && r.body.includes('{ audio: true }'));
 
   r = await postJson('/api/support/clockin', {}, hrCookie);
   ok('Support: HR stempelt sich ein', JSON.parse(r.body).ok === true);
