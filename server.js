@@ -144,10 +144,114 @@ const globalLimiter = rateLimit({
 });
 app.use(globalLimiter);
 
-const sessionStore = new session.MemoryStore();
+// ---------------------------------------------------------------------------
+// Sessions: DB-basierter Store + stabiler Secret.
+// - Secret wird einmal erzeugt und in der settings-Tabelle gespeichert (bzw.
+//   via SESSION_SECRET aus der Umgebung). Ohne stabilen Secret würde jeder
+//   Neustart/Deploy alle signierten Cookies ungültig machen -> Nutzer wären
+//   sofort ausgeloggt.
+// - Der Store liegt in der DB (nicht im RAM): Ein Restart/Deploy verliert
+//   dadurch keine Logins (MemoryStore leert alles).
+// ---------------------------------------------------------------------------
+function sessionSecret() {
+  if (process.env.SESSION_SECRET) return process.env.SESSION_SECRET;
+  const key = 'session_secret';
+  let secret = getSetting(key);
+  if (!secret) {
+    secret = crypto.randomBytes(32).toString('hex');
+    setSetting(key, secret);
+  }
+  return secret;
+}
+
+// express-session Store auf Basis der bestehenden Datenbank. Arbeitet wie der
+// MemoryStore (JSON-Roundtrip), hält die Daten aber dauerhaft in der sessions-
+// Tabelle – auch über Neustarts/Deploys hinweg.
+class DatabaseSessionStore extends session.Store {
+  constructor(opts) {
+    super();
+    this.db = opts.db;
+    this.ttlMs = opts.ttlMs;
+  }
+
+  _rowToSession(row) {
+    if (!row) return null;
+    let sess;
+    try {
+      sess = JSON.parse(row.sess);
+    } catch (e) {
+      this.destroy(row.sid, () => {});
+      return null;
+    }
+    if (sess && sess.cookie) {
+      const expires = typeof sess.cookie.expires === 'string'
+        ? new Date(sess.cookie.expires)
+        : sess.cookie.expires;
+      if (expires && expires.getTime() <= Date.now()) {
+        this.destroy(row.sid, () => {});
+        return null;
+      }
+    }
+    return sess;
+  }
+
+  get(sid, cb) {
+    let row;
+    try {
+      row = this.db.prepare('SELECT sid, sess FROM sessions WHERE sid = ?').get(sid);
+    } catch (err) { return cb(err); }
+    cb(null, this._rowToSession(row));
+  }
+
+  set(sid, sess, cb) {
+    const expire = (sess && sess.cookie && sess.cookie.expires)
+      ? new Date(sess.cookie.expires).toISOString()
+      : new Date(Date.now() + this.ttlMs).toISOString();
+    try {
+      this.db.prepare(`
+        INSERT INTO sessions (sid, sess, expire) VALUES (?, ?, ?)
+        ON CONFLICT(sid) DO UPDATE SET sess = excluded.sess, expire = excluded.expire
+      `).run(sid, JSON.stringify(sess), expire);
+      cb(null);
+    } catch (err) { cb(err); }
+  }
+
+  touch(sid, sess, cb) {
+    this.set(sid, sess, cb);
+  }
+
+  destroy(sid, cb) {
+    try {
+      this.db.prepare('DELETE FROM sessions WHERE sid = ?').run(sid);
+      cb(null);
+    } catch (err) { cb(err); }
+  }
+
+  all(cb) {
+    try {
+      const rows = this.db.prepare('SELECT sid, sess FROM sessions').all();
+      cb(null, rows.map((r) => this._rowToSession(r)).filter(Boolean));
+    } catch (err) { cb(err); }
+  }
+
+  clear(cb) {
+    try {
+      this.db.prepare('DELETE FROM sessions').run();
+      cb(null);
+    } catch (err) { cb(err); }
+  }
+
+  length(cb) {
+    try {
+      cb(null, this.db.prepare('SELECT COUNT(*) AS n FROM sessions').get().n);
+    } catch (err) { cb(err); }
+  }
+}
+
+const sessionStore = new DatabaseSessionStore({ db, ttlMs: 14 * 24 * 60 * 60 * 1000 });
 
 app.use(session({
-  secret: process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex'),
+  secret: sessionSecret(),
   resave: false,
   saveUninitialized: false,
   store: sessionStore,
@@ -158,6 +262,15 @@ app.use(session({
     maxAge: 14 * 24 * 60 * 60 * 1000, // 14 Tage (Discord-Session)
   },
 }));
+
+// Abgelaufene Sessions regelmäßig aus der DB räumen (unref, damit der Prozess
+// nicht offen gehalten wird – z. B. in Tests).
+const sessionCleanup = setInterval(() => {
+  try {
+    db.prepare('DELETE FROM sessions WHERE expire <= ?').run(new Date().toISOString());
+  } catch (e) { /* DB kurz nicht erreichbar */ }
+}, 15 * 60 * 1000);
+if (typeof sessionCleanup.unref === 'function') sessionCleanup.unref();
 
 app.use(loadUser);
 app.use(onboardingGuard);
@@ -733,8 +846,14 @@ app.post('/account/settings/admin/lockdown', requireRoot, (req, res) => {
     }));
     logAccountAction(req.user.id, req.user.id, 'lockdown_enabled', 'IT-Alarm ausgelöst (Zugriff für alle Bearbeiter gesperrt, nur Inhaber darf einloggen).');
     const who = req.user.global_name || req.user.username;
-    whatsapp.sendImportant(`🚨 IT-ALARM ausgelöst von ${who}: ${message}`);
-    flash(req, 'success', 'IT-Alarm ausgelöst. Alle eingeloggten Bearbeiter sehen die rote Meldung und werden abgemeldet.');
+    whatsapp.sendImportant(`🚨 IT-ALARM ausgelöst von ${who}: ${message}`).then((ok) => {
+      if (!ok) console.error('WhatsApp-Pflichtnachricht (IT-Alarm) nicht zugestellt – bitte WHATSAPP_PHONE/WHATSAPP_API_KEY pruefen.');
+    }).catch(() => {});
+    if (!whatsapp.isConfigured()) {
+      flash(req, 'warning', 'IT-Alarm ausgelöst. Achtung: Die WhatsApp-Benachrichtigung ist NICHT konfiguriert (WHATSAPP_PHONE/WHATSAPP_API_KEY fehlen auf dem Server).');
+    } else {
+      flash(req, 'success', 'IT-Alarm ausgelöst. Alle eingeloggten Bearbeiter sehen die rote Meldung und werden abgemeldet.');
+    }
   } else {
     setSetting('system_lockdown', '');
     logAccountAction(req.user.id, req.user.id, 'lockdown_disabled', 'IT-Alarm beendet, Zugriff für Bearbeiter wieder freigegeben.');
@@ -2557,4 +2676,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app, sessionStore, session, runAccountScheduler }; // für Tests
+module.exports = { app, sessionStore, session, DatabaseSessionStore, sessionSecret, runAccountScheduler }; // für Tests

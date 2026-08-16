@@ -31,6 +31,14 @@ delete process.env.SMTP_PASS;
 delete process.env.SMTP_PORT;
 delete process.env.SMTP_SECURE;
 delete process.env.MAIL_FROM;
+// WhatsApp nie echt senden: Feste Fake-Zugangsdaten, damit whatsapp.isConfigured()
+// true ist und der komplette Versand-Weg (auch sendImportant) durchlaufen wird.
+// Das echte sendMessage wird weiter unten durch einen Zähler-Stub ersetzt –
+// so geht in Tests niemals eine echte Nachricht an CallMeBot (sonst wird das
+// Quota von 48 Nachrichten / 240 min verbraucht und echte IT-Alarm-Meldungen
+// schlagen danach mit "209 Message limit reached" fehl).
+process.env.WHATSAPP_PHONE = '4911111111111';
+process.env.WHATSAPP_API_KEY = 'test-key-123';
 // Guild-Prüfung bleibt hier aus (DISCORD_GUILD_ID nicht gesetzt),
 // damit der komplette Flow ohne echten Server durchlaeuft.
 
@@ -70,10 +78,18 @@ global.fetch = async (url, opts = {}) => {
 };
 
 // /auth/discord erzeugt zufaelligen State
-const { app, sessionStore } = require('./server');
+const { app, sessionStore, DatabaseSessionStore, sessionSecret } = require('./server');
 const { db, getSetting, migrateLogActions, logActionLabel, getTicketTranscript } = require('./db');
 const config = require('./config');
 const pushModule = require('./push');
+
+// WhatsApp-Versand im Test durch einen Zähler-Stub ersetzen: Kein echtes HTTP
+// an CallMeBot. Aufrufe landen in waCalls und können per Assertion geprüft
+// werden (z. B. ob der IT-Alarm eine WhatsApp-Pflichtmeldung auslöst).
+const waCalls = [];
+const whatsappStub = (text) => { waCalls.push(String(text)); return Promise.resolve(true); };
+const whatsappModule = require('./whatsapp');
+whatsappModule.sendMessage = whatsappStub;
 
 let server;
 let base;
@@ -779,8 +795,11 @@ function findMail(subjectPart) {
   whatsappModule.sendMessage = origWASend;
 
   // IT-Alarm (früher "Zugriff sperren"): rote Vollbild-Meldung + Ton + Sperre
+  const waAlarmBefore = waCalls.length;
   r = await post('/account/settings/admin/lockdown', { action: 'enable', message: 'Wegen Wartung' }, hrhrCookie);
   ok('IT-Alarm: durch Inhaber ausgeloest', r.status === 302);
+  const waAlarmTriggered = waCalls.slice(waAlarmBefore).find((t) => t.includes('IT-ALARM ausgelöst'));
+  ok('IT-Alarm: WhatsApp-Pflichtmeldung wird ausgeloest', !!waAlarmTriggered, waAlarmTriggered || 'keine Meldung');
   r = await get('/api/status');
   statusJson = JSON.parse(r.body);
   ok('API-Status: oeffentlich erreichbar', r.status === 200 && statusJson.lockdown && statusJson.lockdown.enabled === true, r.body.slice(0, 120));
@@ -857,7 +876,8 @@ function findMail(subjectPart) {
   r = await get('/support', userCookie);
   ok('Support: Anrufer-Seite erreichbar, Hotline + Anruf-Button', r.status === 200 && r.body.includes('Voice-Support') && r.body.includes('support.js'));
   ok('Support: Ansage-Intervall wird an den Client geliefert', r.body.includes('window.SUPPORT_ANNOUNCE_MS = 30000') && r.body.includes('id="announceMuteBtn"'));
-  ok('Support: Aufzeichnungs-Hinweis lesbar strukturiert', r.body.includes('class="recording-badge"') && r.body.includes('class="recording-title"') && r.body.includes('class="recording-detail"'));
+  ok('Support: Rauschunterdrückung-Schalter auf der Anrufer-Seite', r.body.includes('id="noiseBtn"') && r.body.includes('Rauschunterdrückung filtert Hintergrundgeräusche'));
+  ok('Support: Aufzeichnungs-Hinweis lesbar strukturiert', r.body.includes('class="recording-badge"') && r.body.includes('class="recording-title"') && r.body.includes('class="recording-detail"'))
 
   r = await get('/support/staff', userCookie);
   ok('Support: Mitarbeiter-Konsole fuer normale Nutzer verweigert (403)', r.status === 403);
@@ -874,6 +894,14 @@ function findMail(subjectPart) {
   r = await get('/static/js/support.js', userCookie);
   ok('Support: Anruf wendet die Antwort des Anrufers an (beidseitiges Audio)',
     r.status === 200 && r.body.includes('answerAppliedFor') && r.body.includes('setRemoteDescription(JSON.parse(c.answer))'));
+  ok('Support: Rauschunterdrückung aktiviert (Standard) + per Schalter umschaltbar',
+    r.status === 200
+    && r.body.includes('noiseSuppression')
+    && r.body.includes('setNoiseSuppression')
+    && r.body.includes("localStorage.getItem('support_noise_suppression')")
+    && r.body.includes('autoGainControl')
+    && r.body.includes('replaceTrack')
+    && r.body.includes('staffNoiseBtn'));
 
   r = await postJson('/api/support/clockin', {}, hrCookie);
   ok('Support: HR stempelt sich ein', JSON.parse(r.body).ok === true);
@@ -1137,6 +1165,34 @@ function findMail(subjectPart) {
 
   support.deleteCallRecording(recEntry.id);
   ok('Support: Aufzeichnung geloescht', support.getCallRecording(recEntry.id) === null);
+
+  // Session-Persistenz: Sessions liegen in der DB (nicht im RAM). Ein Neustart/
+  // Deploy (simuliert durch eine frische Store-Instanz auf derselben DB) darf
+  // eingeloggte Nutzer NICHT ausloggen.
+  const sidOfOwner = (() => {
+    const m = hrhrCookie.match(/connect\.sid=s(?:%3A|:)([^;]+)/);
+    return m ? cookieSignature.unsign(decodeURIComponent(m[1]), process.env.SESSION_SECRET) : null;
+  })();
+  const freshStore = new DatabaseSessionStore({ db, ttlMs: 14 * 24 * 60 * 60 * 1000 });
+  const keptSession = await new Promise((resolve) => freshStore.get(sidOfOwner, (err, s) => resolve(s)));
+  ok('Session: Login bleibt nach Neustart erhalten (DB-Store)', !!keptSession && !!keptSession.userId, sidOfOwner ? sidOfOwner.slice(0, 8) : 'keine Session');
+  const sessionCount = db.prepare('SELECT COUNT(*) AS n FROM sessions').get().n;
+  ok('Session: mehrere Nutzer-Sessions in der DB gespeichert', sessionCount >= 3, `count=${sessionCount}`);
+
+  // Abgelaufene Sessions werden beim Lesen verworfen.
+  await new Promise((resolve) => sessionStore.set('expired-sid-test', { userId: 1, cookie: { expires: new Date(Date.now() - 1000) } }, resolve));
+  const expiredSession = await new Promise((resolve) => freshStore.get('expired-sid-test', (err, s) => resolve(s)));
+  ok('Session: abgelaufene Session wird verworfen', expiredSession === null);
+
+  // Stabiler Session-Secret: Ohne SESSION_SECRET wird er einmal erzeugt, in den
+  // Einstellungen gespeichert und bei jedem Start wiederverwendet. Ein zufällig
+  // neuer Secret pro Start würde alle Cookies ungültig machen (-> Ausloggen).
+  const savedSecretEnv = process.env.SESSION_SECRET;
+  delete process.env.SESSION_SECRET;
+  const secretA = sessionSecret();
+  const secretB = sessionSecret();
+  process.env.SESSION_SECRET = savedSecretEnv;
+  ok('Session: Secret wird dauerhaft gespeichert und ist stabil', secretA === secretB && secretA.length >= 32 && getSetting('session_secret') === secretA);
 
   const logoutRes = await fetch(base + '/auth/logout', {
     method: 'POST', headers: { cookie: userCookie }, redirect: 'manual',

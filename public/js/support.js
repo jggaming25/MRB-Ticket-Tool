@@ -311,12 +311,54 @@
     localStream: null,
     audioEl: null,
     remoteStream: null,
+    muted: false,
+    // Rauschunterdrückung: Standardmäßig an, Wahl des Nutzers wird dauerhaft
+    // gespeichert (localStorage), damit sie bei jedem Anruf gilt.
+    noiseSuppression: (() => {
+      try { return localStorage.getItem('support_noise_suppression') !== '0'; } catch (e) { return true; }
+    })(),
+    audioConstraints() {
+      return {
+        echoCancellation: true,
+        noiseSuppression: !!this.noiseSuppression,
+        autoGainControl: true,
+      };
+    },
     async getStream() {
       if (this.localStream) return this.localStream;
-      this.localStream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true },
-      });
+      this.localStream = await navigator.mediaDevices.getUserMedia({ audio: this.audioConstraints() });
+      if (this.muted) this.setMuted(true);
       return this.localStream;
+    },
+    // Rauschunterdrückung umschalten: Wird gespeichert und – falls bereits ein
+    // Anruf läuft – das Mikrofon mit den neuen Einstellungen neu geöffnet und
+    // der Track im laufenden Peer-Connection ersetzt (replaceTrack).
+    async setNoiseSuppression(enabled) {
+      this.noiseSuppression = !!enabled;
+      try { localStorage.setItem('support_noise_suppression', this.noiseSuppression ? '1' : '0'); } catch (e) { /* ignore */ }
+      if (!this.localStream) return;
+      let newStream;
+      try {
+        newStream = await navigator.mediaDevices.getUserMedia({ audio: this.audioConstraints() });
+      } catch (e) {
+        console.warn('Mikrofon mit geänderten Einstellungen konnte nicht neu geöffnet werden:', e);
+        return;
+      }
+      const oldStream = this.localStream;
+      this.localStream = newStream;
+      const pc = this.pc;
+      if (pc) {
+        const newTracks = newStream.getAudioTracks();
+        const senders = pc.getSenders();
+        let i = 0;
+        for (const sender of senders) {
+          if (!sender.track || sender.track.kind !== 'audio') continue;
+          const track = newTracks[i++];
+          try { await sender.replaceTrack(track || null); } catch (e) { console.warn('replaceTrack fehlgeschlagen:', e); }
+        }
+      }
+      oldStream.getTracks().forEach((t) => t.stop());
+      if (this.muted) this.setMuted(true);
     },
     createPeer() {
       if (this.pc) this.pc.close();
@@ -346,10 +388,11 @@
       this.audioEl.play().catch(() => {});
     },
     setMuted(m) {
-      if (this.localStream) this.localStream.getAudioTracks().forEach((t) => { t.enabled = !m; });
+      this.muted = !!m;
+      if (this.localStream) this.localStream.getAudioTracks().forEach((t) => { t.enabled = !this.muted; });
     },
-    // Mikrofon ist nach Verbindungsaufbau immer aktiv.
     unmute() {
+      this.muted = false;
       if (this.localStream) this.localStream.getAudioTracks().forEach((t) => { t.enabled = true; });
     },
     async waitGathering(pc, timeoutMs) {
@@ -691,6 +734,7 @@
           <p class="muted small" id="recordingStatus">${recordingActive ? '🎙️ Aufzeichnung läuft' : ''}</p>
           <div class="my-call-actions">
             <button class="btn btn-sm" id="staffMuteBtn">🔇 Stumm</button>
+            <button class="btn btn-sm" id="staffNoiseBtn"></button>
             <button class="btn btn-sm" id="staffTransferBtn" ${isActive ? '' : 'disabled'}>↪️ Weiterleiten</button>
             <button class="btn btn-danger btn-sm" id="staffHangupBtn">Beenden</button>
           </div>
@@ -702,6 +746,19 @@
         CallManager.setMuted(muted);
         muteBtn.textContent = muted ? '🔊 Ton an' : '🔇 Stumm';
       });
+      const staffNoiseBtn = $('staffNoiseBtn');
+      if (staffNoiseBtn) {
+        const applyStaffNoise = () => {
+          staffNoiseBtn.textContent = CallManager.noiseSuppression
+            ? '🔇 Rauschunterdrückung aus'
+            : '🔊 Rauschunterdrückung an';
+        };
+        applyStaffNoise();
+        staffNoiseBtn.addEventListener('click', async () => {
+          await CallManager.setNoiseSuppression(!CallManager.noiseSuppression);
+          applyStaffNoise();
+        });
+      }
       const transfer = $('staffTransferBtn');
       if (transfer) transfer.addEventListener('click', () => {
         openTransferConfirm(async (targetStaffId) => {
@@ -1030,6 +1087,22 @@
     CallManager.setMuted(muted);
     muteBtn.textContent = muted ? '🔊 Ton an' : '🔇 Mikrofon stumm';
   });
+
+  // Rauschunterdrückung (Anrufer-Seite): Standardmäßig an, lässt sich während
+  // des Gesprächs umschalten (Tracks werden live ersetzt).
+  const noiseBtn = $('noiseBtn');
+  if (noiseBtn) {
+    const applyNoiseLabel = () => {
+      noiseBtn.textContent = CallManager.noiseSuppression
+        ? '🔇 Rauschunterdrückung aus'
+        : '🔊 Rauschunterdrückung an';
+    };
+    applyNoiseLabel();
+    noiseBtn.addEventListener('click', async () => {
+      await CallManager.setNoiseSuppression(!CallManager.noiseSuppression);
+      applyNoiseLabel();
+    });
+  }
 
   refreshIdle();
   setInterval(() => {

@@ -103,6 +103,16 @@ db.exec(`
     value TEXT
   );
 
+  -- Login-Sessions (dauerhaft in der DB): Durch den DB-Store bleiben Nutzer
+  -- auch nach Neustart/Deploy eingeloggt (MemoryStore verliert alles).
+  CREATE TABLE IF NOT EXISTS sessions (
+    sid     TEXT PRIMARY KEY,
+    sess    TEXT NOT NULL,
+    expire  TEXT NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_sessions_expire ON sessions(expire);
+
   CREATE TABLE IF NOT EXISTS account_logs (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     account_id  INTEGER REFERENCES users(id) ON DELETE CASCADE,

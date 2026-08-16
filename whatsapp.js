@@ -48,19 +48,31 @@ function sendMessage(text) {
 // Kritische Meldungen (z. B. IT-Alarm): Bei Fehlschlag automatisch erneut
 // versuchen, bis sie durchkommen – damit eine Pflichtbenachrichtigung nie
 // verloren geht. CallMeBot drosselt auf 48 Nachrichten / 240 min; bei einem
-// Rate-Limit hilft nur Warten, deshalb wächst die Wartezeit zwischen den
-// Versuchen. Die Timer sind "unref'd", damit sie den Prozess nicht offen
-// halten (z. B. bei Tests). Liefert ein Promise, das bei Erfolg true liefert
-// und nach dem letzten Fehlversuch false – Aufrufer können es ignorieren.
+// Rate-Limit (Antwort "209 … Message limit reached") hilft nur Warten, deshalb
+// wächst die Wartezeit zwischen den Versuchen und deckt das gesamte 240-Minuten-
+// Quota-Fenster mehrfach ab (insgesamt ca. 9 Stunden). Die Timer sind "unref'd",
+// damit sie den Prozess nicht offen halten (z. B. bei Tests). Liefert ein
+// Promise, das bei Erfolg true liefert und nach dem letzten Fehlversuch false –
+// Aufrufer können es ignorieren oder das Ergebnis auswerten.
 function sendImportant(text, opts = {}) {
-  if (!isConfigured()) return Promise.resolve(false);
-  const waits = Array.isArray(opts.waits) ? opts.waits : [30_000, 2 * 60_000, 10 * 60_000, 30 * 60_000];
+  if (!isConfigured()) {
+    console.warn('WhatsApp nicht konfiguriert (WHATSAPP_PHONE/WHATSAPP_API_KEY fehlen) – Pflichtnachricht übersprungen:', text);
+    return Promise.resolve(false);
+  }
+  const waits = Array.isArray(opts.waits) ? opts.waits : [
+    30_000, 60_000, 2 * 60_000, 5 * 60_000, 10 * 60_000, 15 * 60_000,
+    30 * 60_000, 60 * 60_000, 60 * 60_000, 60 * 60_000, 60 * 60_000,
+    60 * 60_000, 60 * 60_000, 60 * 60_000, 60 * 60_000,
+  ];
   let i = 0;
   return new Promise((resolve) => {
     const attempt = () => {
       module.exports.sendMessage(text).then((ok) => {
         if (ok) return resolve(true);
-        if (i >= waits.length) return resolve(false);
+        if (i >= waits.length) {
+          console.error('WhatsApp-Pflichtnachricht nach allen Versuchen NICHT zugestellt:', text);
+          return resolve(false);
+        }
         const t = setTimeout(() => { attempt(); }, waits[i++]);
         if (typeof t.unref === 'function') t.unref();
       });

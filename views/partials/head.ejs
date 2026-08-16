@@ -61,7 +61,7 @@
   </header>
   <main class="container">
     <% if (flash) { %>
-      <div class="alert <%= flash.type === 'error' ? 'alert-error' : 'alert-success' %>"><%= flash.text %></div>
+      <div class="alert <%= flash.type === 'error' ? 'alert-error' : (flash.type === 'success' ? 'alert-success' : '') %>"><%= flash.text %></div>
     <% } %>
     <% if (itAlarm && itAlarm.length) { %>
       <% for (const m of itAlarm) { %>
