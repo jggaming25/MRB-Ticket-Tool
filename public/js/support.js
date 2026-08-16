@@ -359,15 +359,19 @@
     async getStream() {
       if (this.localStream) return this.localStream;
       this.localStream = await this.openMicStream();
-      this.sentStream = await this.buildAudioChain(this.localStream);
+      // Zuerst wird immer das rohe Mikrofon versendet (Anruf kommt garantiert
+      // zustande). Die Normalisierung wird danach via applyAudioNormalization
+      // aktiviert, wenn die Audio-Kette sicher laeuft.
+      this.sentStream = this.localStream;
       if (this.muted) this.setMuted(true);
       return this.localStream;
     },
     // Audio-Normalisierung: Das Mikrofon laeuft durch eine Web-Audio-Kette mit
     // DynamicsCompressor, damit Lautstaerke-Schwankungen und leises Sprechen
     // ausgeglichen werden und der Sprecher auch bei schlechter Mikrofon-Qualitaet
-    // deutlich zu verstehen ist. Steht der AudioContext nicht auf "running"
-    // (z. B. Autoplay-Blockade), wird das rohe Mikrofon versendet (Fallback).
+    // deutlich zu verstehen ist. WICHTIG: Die Kette darf den Anruf nie blockieren
+    // oder zum Schweigen bringen – laeuft der AudioContext nicht sofort (z. B.
+    // Autoplay-Blockade), wird das rohe Mikrofon zurueckgegeben.
     async buildAudioChain(rawStream) {
       this.teardownAudioChain();
       if (!rawStream) return rawStream;
@@ -376,10 +380,18 @@
         if (!Ctx) return rawStream;
         if (this.audioCtx && this.audioCtx.state === 'closed') this.audioCtx = null;
         if (!this.audioCtx) this.audioCtx = new Ctx();
-        if (this.audioCtx.state === 'suspended') {
-          try { await this.audioCtx.resume(); } catch (e) { /* ignore */ }
+        // resume() kann ohne Nutzergeste haengen bleiben -> hartes Timeout,
+        // damit getStream()/createOffer() nie blockieren.
+        if (this.audioCtx.state !== 'running') {
+          const started = await Promise.race([
+            this.audioCtx.resume().then(
+              () => this.audioCtx.state === 'running',
+              () => false
+            ),
+            new Promise((resolve) => setTimeout(() => resolve(false), 400)),
+          ]);
+          if (!started) return rawStream;
         }
-        if (this.audioCtx.state !== 'running') return rawStream;
         this.micSource = this.audioCtx.createMediaStreamSource(rawStream);
         this.compressor = this.audioCtx.createDynamicsCompressor();
         this.compressor.threshold.value = -45;
@@ -399,6 +411,29 @@
         this.teardownAudioChain();
         return rawStream;
       }
+    },
+    // Aktiviert die Normalisierung im laufenden Anruf: Baut die Kette auf und
+    // ersetzt den rohen Audio-Track durch den normalisierten. Schlaegt irgendetwas
+    // fehl, bleibt der rohe Track im Einsatz (nie Stille).
+    async applyAudioNormalization() {
+      if (!this.localStream || !this.pc) return;
+      const processed = await this.buildAudioChain(this.localStream);
+      if (!processed || processed === this.localStream) return;
+      this.sentStream = processed;
+      const tracks = processed.getAudioTracks();
+      const senders = this.pc.getSenders();
+      let i = 0;
+      for (const sender of senders) {
+        if (!sender.track || sender.track.kind !== 'audio') continue;
+        const track = tracks[i++];
+        if (!track) continue;
+        try { await sender.replaceTrack(track); }
+        catch (e) {
+          console.warn('replaceTrack (Normalisierung) fehlgeschlagen:', e);
+          return;
+        }
+      }
+      if (this.muted) this.setMuted(true);
     },
     teardownAudioChain() {
       try {
@@ -678,6 +713,8 @@
         await post('/api/support/call/signal', { callId, role: 'offer', sdp: JSON.stringify(pc.localDescription) });
         CallManager.unmute();
         myCallStatus = 'ringing';
+        // Normalisierung nachtraeglich aktivieren (blockiert den Anruf nie).
+        CallManager.applyAudioNormalization();
       } catch (e) {
         console.error('Offer fehlgeschlagen:', e);
       }
@@ -1052,6 +1089,8 @@
       await CallManager.waitGathering(pc, 6000);
       await post('/api/support/call/signal', { callId, role: 'answer', sdp: JSON.stringify(pc.localDescription) });
       CallManager.unmute();
+      // Normalisierung nachtraeglich aktivieren (blockiert den Anruf nie).
+      CallManager.applyAudioNormalization();
     } catch (e) {
       console.error('Answer fehlgeschlagen:', e);
     }

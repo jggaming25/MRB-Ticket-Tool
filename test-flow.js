@@ -913,6 +913,12 @@ function findMail(subjectPart) {
     && r.body.includes('threshold.value = -45')
     && r.body.includes('createMediaStreamDestination')
     && r.body.includes('sentStream'));
+  ok('Support: Normalisierung blockiert/stoert den Anruf nie (rohes Mikro zuerst, ersetzt erst nach Verbindung)',
+    r.body.includes('applyAudioNormalization')
+    && r.body.includes('this.sentStream = this.localStream')
+    && r.body.includes('replaceTrack')
+    && r.body.includes('400')
+    && r.body.includes('Promise.race'));
   ok('Support: Buttons klar beschriftet (Mikrofon/Stumm, Rauschunterdrueckung, Weiterleiten, Beenden)',
     r.body.includes('🎤 Mikrofon an')
     && r.body.includes('🔇 Stummgeschaltet')
