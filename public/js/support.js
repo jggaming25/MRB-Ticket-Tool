@@ -318,6 +318,7 @@
     processedDest: null,
     audioEl: null,
     remoteStream: null,
+    remoteAudioRetry: null,
     muted: false,
     // Rauschunterdrückung: Standardmäßig an, Wahl des Nutzers wird dauerhaft
     // gespeichert (localStorage), damit sie bei jedem Anruf gilt.
@@ -494,15 +495,44 @@
       return this.pc;
     },
     ensureAudio() {
-      if (this.audioEl) return;
-      this.audioEl = document.createElement('audio');
-      this.audioEl.autoplay = true;
-      this.audioEl.srcObject = this.remoteStream;
-      // Muss im DOM sein, damit der Browser das entfernte Audio abspielt.
-      this.audioEl.style.display = 'none';
-      this.audioEl.setAttribute('playsinline', '');
-      document.body.appendChild(this.audioEl);
-      this.audioEl.play().catch(() => {});
+      if (!this.remoteStream || !this.remoteStream.getAudioTracks().length) return;
+      if (!this.audioEl) {
+        this.audioEl = document.createElement('audio');
+        this.audioEl.autoplay = true;
+        // Muss im DOM sein, damit der Browser das entfernte Audio abspielt.
+        this.audioEl.style.display = 'none';
+        this.audioEl.setAttribute('playsinline', '');
+        document.body.appendChild(this.audioEl);
+      }
+      // Stream bei jedem Neuaufbau erneut binden und abspielen. Browser blockieren
+      // Autoplay ohne Nutzeraktion – ein einmaliger play()-Aufruf beim Erstellen
+      // reicht oft nicht (Track hat noch keine Daten). Der Retry unten stellt das
+      // Abspielen sicher, sobald der Browser es erlaubt (nach Klick auf der Seite).
+      if (this.audioEl.srcObject !== this.remoteStream) this.audioEl.srcObject = this.remoteStream;
+      const p = this.audioEl.play();
+      if (p && typeof p.catch === 'function') p.catch(() => {});
+      this.startRemoteAudioRetry();
+    },
+    // Solange der Anruf läuft, wird das Remote-Audio immer wieder zum Abspielen
+    // angestossen, falls der Browser es blockiert hat. Sobald es wirklich spielt,
+    // stoppt der Retry. Wird bei cleanup() beendet.
+    startRemoteAudioRetry() {
+      if (this.remoteAudioRetry) return;
+      this.remoteAudioRetry = setInterval(() => {
+        if (!this.audioEl || !this.remoteStream) { this.stopRemoteAudioRetry(); return; }
+        const tracks = this.remoteStream.getAudioTracks();
+        if (!tracks.length) return;
+        const live = tracks.some((t) => t.readyState === 'live');
+        if (!this.audioEl.paused) {
+          this.stopRemoteAudioRetry();
+        } else if (live) {
+          const p = this.audioEl.play();
+          if (p && typeof p.catch === 'function') p.catch(() => {});
+        }
+      }, 1500);
+    },
+    stopRemoteAudioRetry() {
+      if (this.remoteAudioRetry) { clearInterval(this.remoteAudioRetry); this.remoteAudioRetry = null; }
     },
     setMuted(m) {
       this.muted = !!m;
@@ -527,6 +557,7 @@
       });
     },
     cleanup() {
+      this.stopRemoteAudioRetry();
       if (this.audioEl) { try { this.audioEl.pause(); } catch (e) { /* ignore */ } this.audioEl.srcObject = null; if (this.audioEl.parentNode) this.audioEl.parentNode.removeChild(this.audioEl); this.audioEl = null; }
       if (this.pc) { try { this.pc.close(); } catch (e) { /* ignore */ } this.pc = null; }
       this.teardownAudioChain();
@@ -692,6 +723,7 @@
           }
         }
         startRecording(callId);
+        CallManager.ensureAudio();
         CallManager.unmute();
         return;
       }
@@ -1149,6 +1181,7 @@
       if (c.staffName) {
         text('activeStaffName', `${c.staffName}${c.staffExtension ? ` (${c.staffExtension})` : ''}`);
       }
+      CallManager.ensureAudio();
       CallManager.unmute();
       return;
     }

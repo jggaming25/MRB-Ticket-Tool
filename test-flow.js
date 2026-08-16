@@ -958,6 +958,13 @@ function findMail(subjectPart) {
     && r.body.includes('replaceTrack')
     && r.body.includes('400')
     && r.body.includes('Promise.race'));
+  ok('Support: Remote-Audio wird robust abgespielt (Stream neu binden + Autoplay-Retry, nie dauerhaft stumm)',
+    r.body.includes('ensureAudio')
+    && r.body.includes('startRemoteAudioRetry')
+    && r.body.includes('this.audioEl.srcObject !== this.remoteStream')
+    && r.body.includes('this.audioEl.play()')
+    && r.body.includes('setInterval')
+    && r.body.includes('stopRemoteAudioRetry'));
   ok('Support: Buttons klar beschriftet (Mikrofon/Stumm, Rauschunterdrueckung, Weiterleiten, Beenden)',
     r.body.includes('🎤 Mikrofon an')
     && r.body.includes('🔇 Stummgeschaltet')
