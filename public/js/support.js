@@ -309,6 +309,13 @@
   const CallManager = {
     pc: null,
     localStream: null,
+    // Stream, der ueber WebRTC versendet wird: normalisierter Stream (falls die
+    // Audio-Kette aktiv ist) oder das rohe Mikrofon (Fallback).
+    sentStream: null,
+    audioCtx: null,
+    micSource: null,
+    compressor: null,
+    processedDest: null,
     audioEl: null,
     remoteStream: null,
     muted: false,
@@ -352,8 +359,56 @@
     async getStream() {
       if (this.localStream) return this.localStream;
       this.localStream = await this.openMicStream();
+      this.sentStream = await this.buildAudioChain(this.localStream);
       if (this.muted) this.setMuted(true);
       return this.localStream;
+    },
+    // Audio-Normalisierung: Das Mikrofon laeuft durch eine Web-Audio-Kette mit
+    // DynamicsCompressor, damit Lautstaerke-Schwankungen und leises Sprechen
+    // ausgeglichen werden und der Sprecher auch bei schlechter Mikrofon-Qualitaet
+    // deutlich zu verstehen ist. Steht der AudioContext nicht auf "running"
+    // (z. B. Autoplay-Blockade), wird das rohe Mikrofon versendet (Fallback).
+    async buildAudioChain(rawStream) {
+      this.teardownAudioChain();
+      if (!rawStream) return rawStream;
+      try {
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        if (!Ctx) return rawStream;
+        if (this.audioCtx && this.audioCtx.state === 'closed') this.audioCtx = null;
+        if (!this.audioCtx) this.audioCtx = new Ctx();
+        if (this.audioCtx.state === 'suspended') {
+          try { await this.audioCtx.resume(); } catch (e) { /* ignore */ }
+        }
+        if (this.audioCtx.state !== 'running') return rawStream;
+        this.micSource = this.audioCtx.createMediaStreamSource(rawStream);
+        this.compressor = this.audioCtx.createDynamicsCompressor();
+        this.compressor.threshold.value = -45;
+        this.compressor.knee.value = 15;
+        this.compressor.ratio.value = 12;
+        this.compressor.attack.value = 0.002;
+        this.compressor.release.value = 0.2;
+        const makeup = this.audioCtx.createGain();
+        makeup.gain.value = 1.6;
+        this.processedDest = this.audioCtx.createMediaStreamDestination();
+        this.micSource.connect(this.compressor);
+        this.compressor.connect(makeup);
+        makeup.connect(this.processedDest);
+        return this.processedDest.stream;
+      } catch (e) {
+        console.warn('Audio-Normalisierung nicht verfuegbar:', e);
+        this.teardownAudioChain();
+        return rawStream;
+      }
+    },
+    teardownAudioChain() {
+      try {
+        if (this.micSource) this.micSource.disconnect();
+        if (this.compressor) this.compressor.disconnect();
+        if (this.processedDest) this.processedDest.disconnect();
+      } catch (e) { /* ignore */ }
+      this.micSource = null;
+      this.compressor = null;
+      this.processedDest = null;
     },
     // Rauschunterdrückung umschalten: Wird gespeichert und – falls bereits ein
     // Anruf läuft – das Mikrofon mit den neuen Einstellungen neu geöffnet und
@@ -371,9 +426,10 @@
       }
       const oldStream = this.localStream;
       this.localStream = newStream;
+      this.sentStream = await this.buildAudioChain(newStream);
       const pc = this.pc;
       if (pc) {
-        const newTracks = newStream.getAudioTracks();
+        const newTracks = this.sentStream.getAudioTracks();
         const senders = pc.getSenders();
         let i = 0;
         for (const sender of senders) {
@@ -391,8 +447,9 @@
         iceServers: STUN_LIST,
         iceCandidatePoolSize: 4,
       });
-      if (this.localStream) {
-        this.localStream.getTracks().forEach((t) => this.pc.addTrack(t, this.localStream));
+      const send = this.sentStream || this.localStream;
+      if (send) {
+        send.getTracks().forEach((t) => this.pc.addTrack(t, send));
       }
       this.remoteStream = new MediaStream();
       this.pc.addEventListener('track', (e) => {
@@ -414,11 +471,17 @@
     },
     setMuted(m) {
       this.muted = !!m;
-      if (this.localStream) this.localStream.getAudioTracks().forEach((t) => { t.enabled = !this.muted; });
+      const streams = [this.sentStream, this.localStream];
+      for (const s of streams) {
+        if (s) s.getAudioTracks().forEach((t) => { t.enabled = !this.muted; });
+      }
     },
     unmute() {
       this.muted = false;
-      if (this.localStream) this.localStream.getAudioTracks().forEach((t) => { t.enabled = true; });
+      const streams = [this.sentStream, this.localStream];
+      for (const s of streams) {
+        if (s) s.getAudioTracks().forEach((t) => { t.enabled = true; });
+      }
     },
     async waitGathering(pc, timeoutMs) {
       if (pc.iceGatheringState === 'complete') return;
@@ -431,6 +494,10 @@
     cleanup() {
       if (this.audioEl) { try { this.audioEl.pause(); } catch (e) { /* ignore */ } this.audioEl.srcObject = null; if (this.audioEl.parentNode) this.audioEl.parentNode.removeChild(this.audioEl); this.audioEl = null; }
       if (this.pc) { try { this.pc.close(); } catch (e) { /* ignore */ } this.pc = null; }
+      this.teardownAudioChain();
+      try { if (this.audioCtx && this.audioCtx.state !== 'closed') this.audioCtx.close(); } catch (e) { /* ignore */ }
+      this.audioCtx = null;
+      this.sentStream = null;
       if (this.localStream) { this.localStream.getTracks().forEach((t) => t.stop()); this.localStream = null; }
       this.remoteStream = null;
     },
@@ -758,10 +825,10 @@
           <span class="muted">Durchwahl: ${esc(info.staffExtension || '–')}</span>
           <p class="muted small" id="recordingStatus">${recordingActive ? '🎙️ Aufzeichnung läuft' : ''}</p>
           <div class="my-call-actions">
-            <button class="btn btn-sm" id="staffMuteBtn">🔇 Stumm</button>
-            <button class="btn btn-sm" id="staffNoiseBtn"></button>
-            <button class="btn btn-sm" id="staffTransferBtn" ${isActive ? '' : 'disabled'}>↪️ Weiterleiten</button>
-            <button class="btn btn-danger btn-sm" id="staffHangupBtn">Beenden</button>
+            <button class="btn btn-sm" id="staffMuteBtn" title="Mikrofon ein- oder ausschalten">🎤 Mikrofon an</button>
+            <button class="btn btn-sm" id="staffNoiseBtn" title="Rauschunterdrückung ein- oder ausschalten"></button>
+            <button class="btn btn-sm" id="staffTransferBtn" title="Anruf an einen anderen Mitarbeiter weiterleiten" ${isActive ? '' : 'disabled'}>↪️ Weiterleiten</button>
+            <button class="btn btn-danger btn-sm" id="staffHangupBtn" title="Anruf beenden">📵 Anruf beenden</button>
           </div>
         </div>`;
       let muted = false;
@@ -769,14 +836,14 @@
       if (muteBtn) muteBtn.addEventListener('click', () => {
         muted = !muted;
         CallManager.setMuted(muted);
-        muteBtn.textContent = muted ? '🔊 Ton an' : '🔇 Stumm';
+        muteBtn.textContent = muted ? '🔇 Stummgeschaltet' : '🎤 Mikrofon an';
       });
       const staffNoiseBtn = $('staffNoiseBtn');
       if (staffNoiseBtn) {
         const applyStaffNoise = () => {
           staffNoiseBtn.textContent = CallManager.noiseSuppression
-            ? '🔇 Rauschunterdrückung aus'
-            : '🔊 Rauschunterdrückung an';
+            ? '🎚️ Rauschunterdrückung: An'
+            : '🎚️ Rauschunterdrückung: Aus';
         };
         applyStaffNoise();
         staffNoiseBtn.addEventListener('click', async () => {
@@ -1107,20 +1174,22 @@
   });
 
   let muted = false;
+  muteBtn.title = 'Mikrofon ein- oder ausschalten';
   muteBtn.addEventListener('click', () => {
     muted = !muted;
     CallManager.setMuted(muted);
-    muteBtn.textContent = muted ? '🔊 Ton an' : '🔇 Mikrofon stumm';
+    muteBtn.textContent = muted ? '🔇 Stummgeschaltet' : '🎤 Mikrofon an';
   });
 
   // Rauschunterdrückung (Anrufer-Seite): Standardmäßig an, lässt sich während
   // des Gesprächs umschalten (Tracks werden live ersetzt).
   const noiseBtn = $('noiseBtn');
   if (noiseBtn) {
+    noiseBtn.title = 'Rauschunterdrückung ein- oder ausschalten';
     const applyNoiseLabel = () => {
       noiseBtn.textContent = CallManager.noiseSuppression
-        ? '🔇 Rauschunterdrückung aus'
-        : '🔊 Rauschunterdrückung an';
+        ? '🎚️ Rauschunterdrückung: An'
+        : '🎚️ Rauschunterdrückung: Aus';
     };
     applyNoiseLabel();
     noiseBtn.addEventListener('click', async () => {

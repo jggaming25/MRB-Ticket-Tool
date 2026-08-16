@@ -26,6 +26,15 @@ services:
         sync: false
       - key: SESSION_SECRET
         generateValue: true
+      # WhatsApp-Benachrichtigungen (IT-Alarm, Meldungen, Support-Hinweise) via
+      # CallMeBot. Werte aus der lokalen .env (WHATSAPP_PHONE/WHATSAPP_API_KEY)
+      # hier im Render-Dashboard eintragen oder bei der naechsten Blueprint-
+      # Aktualisierung angeben. WHATSAPP_PHONE = Handynummer international ohne
+      # fuehrende Null (z. B. 4915257...), WHATSAPP_API_KEY = CallMeBot-Key.
+      - key: WHATSAPP_PHONE
+        sync: false
+      - key: WHATSAPP_API_KEY
+        sync: false
       # Discord (https://discord.com/developers/applications)
       - key: DISCORD_CLIENT_ID
         sync: false

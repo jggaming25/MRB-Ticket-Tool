@@ -832,7 +832,8 @@ body.mrb-locked .mrb-lockable select {
 .queue-item:last-child { border-bottom: none; }
 .queue-item-main { display: flex; flex-direction: column; }
 .my-call { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
-.my-call-actions { display: flex; gap: 8px; margin-top: 4px; }
+.my-call-actions { display: flex; gap: 6px; margin-top: 4px; flex-wrap: wrap; }
+.my-call-actions .btn { padding: 3px 9px; font-size: 0.76rem; gap: 5px; }
 .badge-ringing { background: rgba(250, 166, 26, 0.2); color: #faa61a; padding: 2px 8px; border-radius: 999px; font-size: 0.75rem; }
 .badge-active { background: rgba(59, 165, 93, 0.2); color: #3ba55d; padding: 2px 8px; border-radius: 999px; font-size: 0.75rem; }
 .hours-line { font-size: 0.85rem; color: var(--muted); text-align: center; margin: 0 0 6px; }

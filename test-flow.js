@@ -907,6 +907,19 @@ function findMail(subjectPart) {
     && r.body.includes("deviceId === 'default'")
     && r.body.includes('openMicStream')
     && r.body.includes('{ audio: true }'));
+  ok('Support: Audio-Normalisierung per DynamicsCompressor (auch bei schlechtem Mikro klar verstaendlich)',
+    r.body.includes('buildAudioChain')
+    && r.body.includes('createDynamicsCompressor')
+    && r.body.includes('threshold.value = -45')
+    && r.body.includes('createMediaStreamDestination')
+    && r.body.includes('sentStream'));
+  ok('Support: Buttons klar beschriftet (Mikrofon/Stumm, Rauschunterdrueckung, Weiterleiten, Beenden)',
+    r.body.includes('🎤 Mikrofon an')
+    && r.body.includes('🔇 Stummgeschaltet')
+    && r.body.includes('Rauschunterdrückung: An')
+    && r.body.includes('Rauschunterdrückung: Aus')
+    && r.body.includes('↪️ Weiterleiten')
+    && r.body.includes('📵 Anruf beenden'));
 
   r = await postJson('/api/support/clockin', {}, hrCookie);
   ok('Support: HR stempelt sich ein', JSON.parse(r.body).ok === true);
