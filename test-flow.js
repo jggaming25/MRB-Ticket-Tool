@@ -1132,6 +1132,40 @@ function findMail(subjectPart) {
   r = await get('/account/settings/admin/employee?number=999999', hrhrCookie);
   ok('Abfrage: unbekannte Nummer zeigt Hinweis', r.status === 200 && r.body.includes('Kein Mitarbeiter'));
 
+  // Schichtzeit-Ranking per WhatsApp: Ranking aller Mitarbeiter nach gesamter
+  // Schichtzeit im wählbaren Zeitraum.
+  r = await get('/account/settings', hrhrCookie);
+  ok('Ranking: Formular in Admin-Optionen sichtbar', r.status === 200
+    && r.body.includes('Schichtzeit-Ranking per WhatsApp')
+    && r.body.includes('name="from"') && r.body.includes('name="to"'));
+  // Test-Schichten mit festen Zeiten einfügen (UTC): Max 8h + 4h30, Lisa 12h
+  const rankingSeed = [
+    { uid: hrUser.id, from: '2026-08-01 08:00:00', to: '2026-08-01 16:00:00' },
+    { uid: hrUser.id, from: '2026-08-02 09:00:00', to: '2026-08-02 13:30:00' },
+    { uid: normalUser.id, from: '2026-08-01 10:00:00', to: '2026-08-01 22:00:00' },
+  ];
+  const seedStmt = db.prepare('INSERT INTO support_shifts (user_id, clocked_in_at, clocked_out_at) VALUES (?, ?, ?)');
+  for (const s of rankingSeed) seedStmt.run(s.uid, s.from, s.to);
+  const waBeforeRanking = waCalls.length;
+  r = await post('/account/settings/admin/shift-ranking', { from: '2026-08-01', to: '2026-08-02' }, hrhrCookie);
+  ok('Ranking: Route antwortet mit Redirect', r.status === 302);
+  const waRanking = waCalls.slice(waBeforeRanking).find((t) => t.includes('Schichtzeit-Ranking'));
+  ok('Ranking: WhatsApp-Nachricht wird gesendet', !!waRanking, waRanking || 'keine Nachricht');
+  ok('Ranking: enthaelt Mitarbeiter-Zeiten sortiert', !!waRanking
+    && waRanking.includes('Max Mustermann – 12h 30 min')
+    && waRanking.includes('Lisa – 12h')
+    && waRanking.indexOf('Max Mustermann') < waRanking.indexOf('Lisa'), (waRanking || '').slice(0, 200));
+  // Ungültiger Zeitraum: kein WhatsApp-Versand
+  const waBeforeBad = waCalls.length;
+  r = await post('/account/settings/admin/shift-ranking', { from: '2026-08-01', to: '' }, hrhrCookie);
+  ok('Ranking: fehlendes Datum abgelehnt', r.status === 302 && waCalls.length === waBeforeBad);
+  r = await post('/account/settings/admin/shift-ranking', { from: '2026-08-05', to: '2026-08-01' }, hrhrCookie);
+  ok('Ranking: Bis vor Von abgelehnt', r.status === 302 && waCalls.length === waBeforeBad);
+  // Berechtigung: nur Inhaber (requireRoot)
+  r = await post('/account/settings/admin/shift-ranking', { from: '2026-08-01', to: '2026-08-02' }, userCookie);
+  ok('Ranking: normaler Nutzer verweigert (403)', r.status === 403);
+  db.prepare("DELETE FROM support_shifts WHERE clocked_in_at IN ('2026-08-01 08:00:00','2026-08-02 09:00:00','2026-08-01 10:00:00')").run();
+
   // Warteschleifenmusik: Song hinzufügen, listen, laden und löschen
   const songId = support.addHoldMusic({ name: 'test-song.mp3', mime: 'audio/mpeg', size: 4, data: Buffer.from([0x1, 0x2, 0x3, 0x4]), userId: 1 });
   const songList = support.listHoldMusic();

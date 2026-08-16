@@ -318,6 +318,29 @@
 
       <hr class="admin-sep">
 
+      <h3>Schichtzeit-Ranking per WhatsApp</h3>
+      <p class="hint">
+        Erstelle ein Ranking aller Mitarbeiter nach gesamter Schichtzeit im gewählten Zeitraum
+        (Europe/Berlin) und lass es dir per WhatsApp schicken. Offene (angefangene) Schichten
+        zählen bis zum jetzigen Zeitpunkt.
+      </p>
+      <form method="post" action="/account/settings/admin/shift-ranking" class="form-row"
+            data-confirm="Schichtzeit-Ranking wirklich per WhatsApp an dich senden?">
+        <div class="form-group">
+          <label class="small">Von (inkl.)</label>
+          <input type="date" name="from" class="input" required>
+        </div>
+        <div class="form-group">
+          <label class="small">Bis (inkl.)</label>
+          <input type="date" name="to" class="input" required>
+        </div>
+        <div class="form-group">
+          <button type="submit" class="btn btn-primary">Ranking per WhatsApp senden</button>
+        </div>
+      </form>
+
+      <hr class="admin-sep">
+
       <h3>System-Neustart</h3>
       <p class="hint">Startet den Server komplett neu (ca. 1–2 Minuten Ausfallzeit). Tickets und Daten bleiben erhalten.</p>
       <form method="post" action="/account/settings/admin/restart" class="inline-form">

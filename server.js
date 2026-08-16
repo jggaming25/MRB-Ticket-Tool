@@ -1187,6 +1187,92 @@ app.get('/account/settings/admin/employee', requireRoot, (req, res) => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Schichtzeit-Ranking per WhatsApp: Summe der Schichtzeiten aller Mitarbeiter
+// im gewählten Zeitraum (Europe/Berlin), absteigend sortiert, wird als
+// WhatsApp-Nachricht an die konfigurierte Nummer gesendet.
+// ---------------------------------------------------------------------------
+// Rechnet einen lokalen Kalendertag (Europe/Berlin, wie vom <input type="date">)
+// in den UTC-Zeitpunkt der angegebenen Uhrzeit um – passend zur als UTC
+// gespeicherten Schichtzeit ("YYYY-MM-DD HH:MM:SS").
+function berlinLocalToUtcMs(dateStr, hhmmss) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const [hh, mm, ss] = hhmmss.split(':').map(Number);
+  const localGuess = Date.UTC(y, m - 1, d, hh, mm, ss);
+  return localGuess - berlinOffsetMs(new Date(localGuess));
+}
+
+function utcDbString(ms) {
+  const u = new Date(ms);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${u.getUTCFullYear()}-${pad(u.getUTCMonth() + 1)}-${pad(u.getUTCDate())} ${pad(u.getUTCHours())}:${pad(u.getUTCMinutes())}:${pad(u.getUTCSeconds())}`;
+}
+
+app.post('/account/settings/admin/shift-ranking', requireRoot, (req, res) => {
+  const from = String(req.body.from || '').trim();
+  const to = String(req.body.to || '').trim();
+  const dateRe = /^\d{4}-\d{2}-\d{2}$/;
+  if (!dateRe.test(from) || !dateRe.test(to)) {
+    flash(req, 'error', 'Ungültiger Zeitraum – bitte Von- und Bis-Datum angeben.');
+    return res.redirect('/account/settings');
+  }
+  if (to < from) {
+    flash(req, 'error', 'Ungültiger Zeitraum – das Bis-Datum darf nicht vor dem Von-Datum liegen.');
+    return res.redirect('/account/settings');
+  }
+  const fromUtc = utcDbString(berlinLocalToUtcMs(from, '00:00:00'));
+  const toUtc = utcDbString(berlinLocalToUtcMs(to, '23:59:59'));
+  const nowUtc = utcDbString(Date.now());
+  const shifts = db.prepare(`
+    SELECT s.user_id, s.clocked_in_at, s.clocked_out_at,
+           u.username, u.global_name
+    FROM support_shifts s
+    JOIN users u ON u.id = s.user_id
+    WHERE s.clocked_in_at <= ?
+  `).all(toUtc);
+  const fromMs = Date.parse(fromUtc.replace(' ', 'T') + 'Z');
+  const toMs = Date.parse(toUtc.replace(' ', 'T') + 'Z');
+  const perUser = new Map();
+  for (const s of shifts) {
+    const endEff = s.clocked_out_at || nowUtc;
+    if (endEff <= fromUtc) continue;
+    const startMs = Date.parse(s.clocked_in_at.replace(' ', 'T') + 'Z');
+    const endMs = Math.min(Date.parse(endEff.replace(' ', 'T') + 'Z'), toMs);
+    const secs = Math.max(0, Math.round((endMs - startMs) / 1000));
+    if (!secs) continue;
+    const name = s.global_name || s.username || `#${s.user_id}`;
+    const entry = perUser.get(s.user_id) || { name, seconds: 0 };
+    entry.seconds += secs;
+    perUser.set(s.user_id, entry);
+  }
+  const ranking = [...perUser.values()].sort((a, b) => b.seconds - a.seconds).slice(0, 25);
+  const fmtDur = (secs) => {
+    const h = Math.floor(secs / 3600);
+    const m = Math.round((secs % 3600) / 60);
+    if (h <= 0) return `${m} min`;
+    if (m === 0) return `${h}h`;
+    return `${h}h ${m} min`;
+  };
+  const fmtDateLabel = (d) => `${d.slice(8, 10)}.${d.slice(5, 7)}.${d.slice(0, 4)}`;
+  const dateLabel = `${fmtDateLabel(from)} – ${fmtDateLabel(to)}`;
+  const lines = ranking.map((e, i) => `${i + 1}. ${e.name} – ${fmtDur(e.seconds)}`);
+  const totalSecs = ranking.reduce((acc, e) => acc + e.seconds, 0);
+  const msg = [
+    `🏆 Schichtzeit-Ranking ${dateLabel}`,
+    ...(lines.length ? lines : ['Keine Schichtzeiten im Zeitraum.']),
+    `Gesamt: ${ranking.length} Mitarbeiter · ${fmtDur(totalSecs)}`,
+  ].join('\n');
+  if (!whatsapp.isConfigured()) {
+    flash(req, 'warning', 'Ranking erstellt, aber WhatsApp ist nicht konfiguriert (WHATSAPP_PHONE/WHATSAPP_API_KEY fehlen auf dem Server).');
+    return res.redirect('/account/settings');
+  }
+  whatsapp.sendMessage(msg).then((ok) => {
+    if (!ok) console.error('Schichtzeit-Ranking per WhatsApp nicht zugestellt.');
+  }).catch(() => {});
+  flash(req, 'success', `Schichtzeit-Ranking (${dateLabel}) wird per WhatsApp gesendet.`);
+  res.redirect('/account/settings');
+});
+
 // ---- Benachrichtigungen: Änderungen an sichtbaren Tickets seit Zeitpunkt ----
 // Liefert Ticket-Änderungen, die der eingeloggte Nutzer sehen darf (Nutzer:
 // eigene Tickets; Team/Inhaber: alle Tickets). Der Client pollt diesen
