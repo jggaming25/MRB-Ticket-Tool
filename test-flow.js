@@ -794,6 +794,45 @@ function findMail(subjectPart) {
   ok('WhatsApp-Pflicht: nach letztem Fehlversuch ohne Erfolg beendet', exhausted === false);
   whatsappModule.sendMessage = origWASend;
 
+  // WhatsApp-Quota-Guard: Erfolgreiche Sends werden im 240-min-Fenster gezählt;
+  // ab 48 wird lokal gestoppt (kein weiterer CallMeBot-Aufruf), Rate-Limit (209)
+  // wird erkannt und nicht als versendet verbucht.
+  {
+    const httpsMod = require('node:https');
+    const realHttpsGet = httpsMod.get;
+    let waHttpCalls = 0;
+    httpsMod.get = (url, cb) => {
+      waHttpCalls++;
+      const fakeReq = { on: () => fakeReq, setTimeout: () => fakeReq, destroy: () => {} };
+      setImmediate(() => {
+        const { Readable } = require('node:stream');
+        const res = new Readable({ read() {} });
+        res.statusCode = 200;
+        cb(res);
+        res.push(url.includes('RateLimit') ? 'ERROR: limit of 48 messages per 240 minutes' : 'Message queued');
+        res.push(null);
+      });
+      return fakeReq;
+    };
+    delete require.cache[require.resolve('./whatsapp')];
+    const quotaWa = require('./whatsapp');
+    const quotaOk = [];
+    for (let n = 0; n < 48; n++) quotaOk.push(await quotaWa.sendMessage(`Quota-Test ${n}`));
+    const quotaBlocked = await quotaWa.sendMessage('Quota-Test 49');
+    ok('WhatsApp-Quota: 48 Sends erlaubt, 49. lokal blockiert ohne CallMeBot-Aufruf',
+      quotaOk.filter(Boolean).length === 48 && quotaBlocked === false && waHttpCalls === 48,
+      `ok=${quotaOk.filter(Boolean).length} calls=${waHttpCalls}`);
+    delete require.cache[require.resolve('./whatsapp')];
+    const rateWa = require('./whatsapp');
+    const rateBefore = rateWa.lastRateLimitAt;
+    const rateLimited = await rateWa.sendMessage('RateLimit-Test');
+    ok('WhatsApp-Quota: Rate-Limit erkannt, kein Versand, Zeitpunkt gemerkt',
+      rateLimited === false && rateWa.lastRateLimitAt > rateBefore && rateWa.quotaUsed() === 0,
+      `used=${rateWa.quotaUsed()} calls=${waHttpCalls}`);
+    httpsMod.get = realHttpsGet;
+    delete require.cache[require.resolve('./whatsapp')];
+  }
+
   // IT-Alarm (früher "Zugriff sperren"): rote Vollbild-Meldung + Ton + Sperre
   const waAlarmBefore = waCalls.length;
   r = await post('/account/settings/admin/lockdown', { action: 'enable', message: 'Wegen Wartung' }, hrhrCookie);

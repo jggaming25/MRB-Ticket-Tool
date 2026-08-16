@@ -11,9 +11,27 @@ const https = require('node:https');
 const phone = String(process.env.WHATSAPP_PHONE || '').trim();
 const apiKey = String(process.env.WHATSAPP_API_KEY || '').trim();
 
+// CallMeBot-Quota: max. 48 Nachrichten pro 240 Minuten. Wir zaehlen die
+// erfolgreich gesendeten Nachrichten in einem gleitenden Fenster und geben ab
+// der Grenze nichts mehr zum Versand frei – so verbrennt die App die Quota
+// nicht durch Tests/Retries und loggt klar, warum eine Nachricht nicht rausgeht.
+const QUOTA_LIMIT = 48;
+const QUOTA_WINDOW_MS = 240 * 60 * 1000;
+const sentTimes = [];
+
+function quotaUsed() {
+  const now = Date.now();
+  while (sentTimes.length && sentTimes[0] <= now - QUOTA_WINDOW_MS) sentTimes.shift();
+  return sentTimes.length;
+}
+
 function isConfigured() {
   return !!(phone && apiKey);
 }
+
+// Zeitpunkt des letzten Rate-Limits (Status 209) – sendImportant wartet danach
+// erst wieder auf das Ende des Quota-Fensters, statt die Grenze zu erreichen.
+let lastRateLimitAt = 0;
 
 // Sendet eine Textnachricht (fire-and-forget). Liefert immer ein Promise,
 // damit Aufrufer nicht auf Fehler reagieren müssen.
@@ -24,14 +42,26 @@ function sendMessage(text) {
     console.warn('WhatsApp nicht konfiguriert (WHATSAPP_PHONE/WHATSAPP_API_KEY fehlen) – Nachricht übersprungen:', msg);
     return Promise.resolve(false);
   }
+  if (quotaUsed() >= QUOTA_LIMIT) {
+    console.error(`WhatsApp-Quota (${QUOTA_LIMIT} Nachrichten / ${QUOTA_WINDOW_MS / 60000} min) erreicht – Nachricht NICHT gesendet. Warte bis zum Ablauf des Fensters.`, msg.slice(0, 80));
+    return Promise.resolve(false);
+  }
   const url = `https://api.callmebot.com/whatsapp.php?phone=${encodeURIComponent(phone)}&text=${encodeURIComponent(msg)}&apikey=${encodeURIComponent(apiKey)}`;
   return new Promise((resolve) => {
     const req = https.get(url, (res) => {
       let body = '';
       res.on('data', (chunk) => { body += chunk; });
       res.on('end', () => {
+        const isRateLimit = res.statusCode === 209 || /limit of \d+ messages/i.test(body);
         const ok = res.statusCode === 200 && !/error/i.test(body.slice(0, 300));
-        if (!ok) console.error('WhatsApp-Versand fehlgeschlagen:', res.statusCode, body.slice(0, 300));
+        if (isRateLimit) {
+          lastRateLimitAt = Date.now();
+          console.error('WhatsApp-Rate-Limit (48 Nachrichten / 240 min) erreicht – Nachricht NICHT zugestellt. Erst nach Ablauf des Fensters erneut versuchen.', msg.slice(0, 80));
+        } else if (!ok) {
+          console.error('WhatsApp-Versand fehlgeschlagen:', res.statusCode, body.slice(0, 300));
+        } else {
+          sentTimes.push(Date.now());
+        }
         resolve(ok);
       });
     });
@@ -73,7 +103,13 @@ function sendImportant(text, opts = {}) {
           console.error('WhatsApp-Pflichtnachricht nach allen Versuchen NICHT zugestellt:', text);
           return resolve(false);
         }
-        const t = setTimeout(() => { attempt(); }, waits[i++]);
+        let wait = waits[i++];
+        // Nach einem Rate-Limit nichts verbrennen: erst deutlich später erneut
+        // versuchen, damit die 240-Minuten-Quota wieder freigegeben ist.
+        if (module.exports.lastRateLimitAt && Date.now() - module.exports.lastRateLimitAt < QUOTA_WINDOW_MS) {
+          wait = Math.max(wait, 30 * 60 * 1000);
+        }
+        const t = setTimeout(() => { attempt(); }, wait);
         if (typeof t.unref === 'function') t.unref();
       });
     };
@@ -81,4 +117,8 @@ function sendImportant(text, opts = {}) {
   });
 }
 
-module.exports = { isConfigured, sendMessage, sendImportant };
+module.exports = { isConfigured, sendMessage, sendImportant, quotaUsed };
+Object.defineProperty(module.exports, 'lastRateLimitAt', {
+  enumerable: true,
+  get: () => lastRateLimitAt,
+});

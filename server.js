@@ -851,6 +851,8 @@ app.post('/account/settings/admin/lockdown', requireRoot, (req, res) => {
     }).catch(() => {});
     if (!whatsapp.isConfigured()) {
       flash(req, 'warning', 'IT-Alarm ausgelöst. Achtung: Die WhatsApp-Benachrichtigung ist NICHT konfiguriert (WHATSAPP_PHONE/WHATSAPP_API_KEY fehlen auf dem Server).');
+    } else if (whatsapp.lastRateLimitAt && Date.now() - whatsapp.lastRateLimitAt < 240 * 60 * 1000) {
+      flash(req, 'warning', 'IT-Alarm ausgelöst. Achtung: WhatsApp-Quota (48 Nachrichten / 240 min) ist gerade erreicht – die Pflichtmeldung wird automatisch nachgeliefert, sobald CallMeBot wieder senden kann.');
     } else {
       flash(req, 'success', 'IT-Alarm ausgelöst. Alle eingeloggten Bearbeiter sehen die rote Meldung und werden abgemeldet.');
     }
@@ -1208,7 +1210,7 @@ function utcDbString(ms) {
   return `${u.getUTCFullYear()}-${pad(u.getUTCMonth() + 1)}-${pad(u.getUTCDate())} ${pad(u.getUTCHours())}:${pad(u.getUTCMinutes())}:${pad(u.getUTCSeconds())}`;
 }
 
-app.post('/account/settings/admin/shift-ranking', requireRoot, (req, res) => {
+app.post('/account/settings/admin/shift-ranking', requireRoot, async (req, res) => {
   const from = String(req.body.from || '').trim();
   const to = String(req.body.to || '').trim();
   const dateRe = /^\d{4}-\d{2}-\d{2}$/;
@@ -1266,10 +1268,12 @@ app.post('/account/settings/admin/shift-ranking', requireRoot, (req, res) => {
     flash(req, 'warning', 'Ranking erstellt, aber WhatsApp ist nicht konfiguriert (WHATSAPP_PHONE/WHATSAPP_API_KEY fehlen auf dem Server).');
     return res.redirect('/account/settings');
   }
-  whatsapp.sendMessage(msg).then((ok) => {
-    if (!ok) console.error('Schichtzeit-Ranking per WhatsApp nicht zugestellt.');
-  }).catch(() => {});
-  flash(req, 'success', `Schichtzeit-Ranking (${dateLabel}) wird per WhatsApp gesendet.`);
+  const sent = await whatsapp.sendMessage(msg);
+  if (sent) {
+    flash(req, 'success', `Schichtzeit-Ranking (${dateLabel}) wird per WhatsApp gesendet.`);
+  } else {
+    flash(req, 'error', `Schichtzeit-Ranking (${dateLabel}) konnte nicht gesendet werden – CallMeBot-Quota erreicht (48/240 min). Bitte später erneut senden.`);
+  }
   res.redirect('/account/settings');
 });
 
