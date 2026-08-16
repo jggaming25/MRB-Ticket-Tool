@@ -45,4 +45,28 @@ function sendMessage(text) {
   });
 }
 
-module.exports = { isConfigured, sendMessage };
+// Kritische Meldungen (z. B. IT-Alarm): Bei Fehlschlag automatisch erneut
+// versuchen, bis sie durchkommen – damit eine Pflichtbenachrichtigung nie
+// verloren geht. CallMeBot drosselt auf 48 Nachrichten / 240 min; bei einem
+// Rate-Limit hilft nur Warten, deshalb wächst die Wartezeit zwischen den
+// Versuchen. Die Timer sind "unref'd", damit sie den Prozess nicht offen
+// halten (z. B. bei Tests). Liefert ein Promise, das bei Erfolg true liefert
+// und nach dem letzten Fehlversuch false – Aufrufer können es ignorieren.
+function sendImportant(text, opts = {}) {
+  if (!isConfigured()) return Promise.resolve(false);
+  const waits = Array.isArray(opts.waits) ? opts.waits : [30_000, 2 * 60_000, 10 * 60_000, 30 * 60_000];
+  let i = 0;
+  return new Promise((resolve) => {
+    const attempt = () => {
+      module.exports.sendMessage(text).then((ok) => {
+        if (ok) return resolve(true);
+        if (i >= waits.length) return resolve(false);
+        const t = setTimeout(() => { attempt(); }, waits[i++]);
+        if (typeof t.unref === 'function') t.unref();
+      });
+    };
+    attempt();
+  });
+}
+
+module.exports = { isConfigured, sendMessage, sendImportant };

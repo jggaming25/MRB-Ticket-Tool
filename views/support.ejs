@@ -50,9 +50,12 @@
 
     <div class="modal-overlay hidden" id="recordConsentModal">
       <div class="modal">
-        <h3>Hinweis zur Aufzeichnung</h3>
-        <p>Wenn du dich in den Voice-Support einstempelst, werden <strong>alle Gespräche aufgezeichnet</strong> (zu Qualitäts- und Schulungszwecken).</p>
-        <p>Die Aufzeichnungen werden nach <strong>4 Monaten automatisch gelöscht</strong>.</p>
+        <h3>🎙️ Hinweis zur Aufzeichnung</h3>
+        <p>Wenn du dich in den Voice-Support einstempelst, gelten folgende Punkte:</p>
+        <ul class="recording-facts">
+          <li><strong>Alle Gespräche werden aufgezeichnet</strong> – zu Qualitäts- und Schulungszwecken.</li>
+          <li>Die Aufzeichnungen werden nach <strong>4 Monaten automatisch gelöscht</strong>.</li>
+        </ul>
         <p class="hint">Ohne deine Bestätigung kannst du dich nicht einstempeln.</p>
         <div class="modal-actions">
           <button class="btn btn-ghost" id="recordConsentCancel">Abbrechen</button>
@@ -64,7 +67,10 @@
     <div class="modal-overlay hidden" id="transferModal">
       <div class="modal">
         <h3>Anruf weiterleiten?</h3>
-        <p>Der Anrufer wird automatisch mit dem nächsten freien Mitarbeiter verbunden. Ist keiner frei, bleibt der Anrufer vorn in der Warteschlange.</p>
+        <p>Wähle, wohin der Anrufer verbunden werden soll.</p>
+        <label class="transfer-target-label" for="transferTargetSelect">Mitarbeiter:</label>
+        <select id="transferTargetSelect"></select>
+        <p class="hint" id="transferTargetHint">Ist kein Ziel frei, bleibt der Anrufer vorn in der Warteschlange.</p>
         <div class="modal-actions">
           <button class="btn btn-ghost" id="transferCancel">Abbrechen</button>
           <button class="btn btn-primary" id="transferOk">Weiterleiten</button>
@@ -76,11 +82,16 @@
     <p class="muted">Unser Team ist per Sprachanruf über die Website erreichbar – ganz ohne Telefonnummer, direkt hier.</p>
 
     <div class="support-notice">
-      <span id="supportHoursText">Support-Zeiten werden geladen …</span>
+      <div id="supportHoursText">Support-Zeiten werden geladen …</div>
       <span class="badge badge-ringing hidden" id="closedBadge">Derzeit geschlossen</span>
     </div>
-    <div class="support-notice recording">
-      🎙️ <strong>Hinweis zur Aufzeichnung:</strong> Gespräche im Voice-Support werden zu Qualitäts- und Schulungszwecken aufgezeichnet und nach 4 Monaten automatisch gelöscht.
+    <div class="support-notice recording" role="note">
+      <span class="recording-badge">🎙️</span>
+      <span class="recording-body">
+        <strong class="recording-title">Hinweis zur Aufzeichnung</strong>
+        <span>Gespräche im Voice-Support werden zu Qualitäts- und Schulungszwecken <strong>aufgezeichnet</strong>.</span>
+        <span class="recording-detail">Die Aufzeichnungen werden nach <strong>4 Monaten automatisch gelöscht</strong>.</span>
+      </span>
     </div>
 
     <div class="support-call-card card" id="callCard">
@@ -97,8 +108,9 @@
         <p class="muted" id="queuePositionText"></p>
         <p class="hint queue-wait" id="queueWaitText"></p>
         <p class="hint" id="waitTimer"></p>
-        <p class="hint">Bitte bleiben Sie in dieser Schleife – Sie hören Warteschleifenmusik, bis ein Mitarbeiter Sie annimmt.</p>
+        <p class="hint">Bitte bleiben Sie in dieser Schleife – Sie hören Warteschleifenmusik und Ansagen, bis ein Mitarbeiter Sie annimmt.</p>
         <div class="support-mic-controls">
+          <button class="btn" id="announceMuteBtn">🔊 Ansagen an</button>
           <button class="btn btn-danger" id="hangupWaitingBtn">Anruf beenden</button>
         </div>
       </div>
@@ -130,6 +142,7 @@
       <ol>
         <li>Klicken Sie auf „Support anrufen“ – Sie landen in der Warteschlange.</li>
         <li>Ihr Browser bittet um Mikrofon-Zugriff und Sie hören Warteschleifenmusik.</li>
+        <li>In regelmäßigen Abständen informiert Sie eine Ansage über Ihre Position und die verfügbaren Mitarbeiter (deutsch und englisch).</li>
         <li>Ein freier Mitarbeiter nimmt Ihr Gespräch an – Sie sprechen einfach los, ohne selbst etwas zu drücken.</li>
       </ol>
       <p class="hint">Der Anruf läuft über verschlüsselte WebRTC-Verbindung direkt zwischen Ihrem Browser und dem Mitarbeiter.</p>
@@ -139,6 +152,7 @@
   <script>
     window.SUPPORT_STAFF = <%= staff ? 'true' : 'false' %>;
     window.SUPPORT_POLL_MS = <%= pollMs %>;
+    window.SUPPORT_ANNOUNCE_MS = <%= announceMs %>;
     window.SUPPORT_PUSH_KEY = <%- pushEnabled ? JSON.stringify(pushPublicKey) : 'null' %>;
     window.SUPPORT_NOTIFY = <%= user && user.notify_changes === 1 ? 'true' : 'false' %>;
     window.SUPPORT_STUN = <%- JSON.stringify(stunServers) %>;

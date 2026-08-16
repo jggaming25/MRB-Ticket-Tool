@@ -1,7 +1,15 @@
 'use strict';
 
-const { db, getSetting } = require('./db');
+const { db, getSetting, setSetting } = require('./db');
 const config = require('./config');
+
+// Websites, die Meldungen über /api/status und den gelben Banner empfangen.
+const SITES = {
+  tickets: 'TicketSystem MRB',
+  anwesenheit: 'Anwesenheits-Tool',
+  befehl: 'MRB-OnlineBefehl',
+};
+const SITE_KEYS = Object.keys(SITES);
 
 const ROLE_LABELS = { user: 'Nutzer', hr: 'Team', hrhr: 'Inhaber' };
 const STATUS_LABELS = {
@@ -157,17 +165,77 @@ function getLockdown() {
   }
 }
 
+// ---------------------------------------------------------------------------
 // Meldungen (früher "IT-Alarm"): Einfacher Hinweis-Banner (gelb) oben auf allen
-// Seiten für alle eingeloggten Nutzer – ohne Ton, ohne Sperre.
-function getAlarm() {
-  const raw = getSetting('it_alarm');
-  if (!raw) return null;
+// Seiten für alle eingeloggten Nutzer – ohne Ton, ohne Sperre. Seit dem
+// Update können mehrere Meldungen gleichzeitig gesetzt werden, jeweils gezielt
+// für eine Auswahl an Websites (tickets / anwesenheit / befehl). Eine leere
+// websites-Liste bedeutet "alle Websites".
+// ---------------------------------------------------------------------------
+
+function migrateLegacyAlarm() {
+  const legacy = getSetting('it_alarm');
+  if (!legacy) return;
   try {
-    const alarm = JSON.parse(raw);
-    return alarm && alarm.text ? alarm : null;
+    const a = JSON.parse(legacy);
+    if (a && a.text) {
+      addMessage({
+        text: String(a.text).trim(),
+        websites: [],
+        set_by: a.set_by || null,
+        set_at: a.set_at || new Date().toISOString(),
+      });
+    }
+  } catch {}
+  setSetting('it_alarm', '');
+}
+
+function listMessages() {
+  const raw = getSetting('it_messages');
+  if (!raw) return [];
+  try {
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr.filter((m) => m && m.text) : [];
   } catch {
-    return null;
+    return [];
   }
+}
+
+function saveMessages(messages) {
+  setSetting('it_messages', JSON.stringify(messages));
+}
+
+function addMessage(msg) {
+  const messages = listMessages();
+  messages.push({
+    id: msg.id || `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
+    text: String(msg.text || '').trim(),
+    websites: Array.isArray(msg.websites)
+      ? [...new Set(msg.websites.filter((w) => SITE_KEYS.includes(w)))]
+      : [],
+    set_by: msg.set_by || null,
+    set_at: msg.set_at || new Date().toISOString(),
+  });
+  saveMessages(messages);
+  return messages;
+}
+
+function removeMessage(id) {
+  saveMessages(listMessages().filter((m) => m.id !== id));
+}
+
+// Liefert alle Meldungen; optional gefiltert auf eine Website. Meldungen ohne
+// Website-Auswahl gelten für alle Websites.
+function getMessages(site) {
+  const all = listMessages();
+  if (!site || !SITE_KEYS.includes(site)) return all;
+  return all.filter((m) => !m.websites || m.websites.length === 0 || m.websites.includes(site));
+}
+
+// Meldungen für die Haupt-App (TicketSystem MRB) – Rückwärtskompatibel für
+// bestehende Aufrufer, liefert jetzt aber ein Array statt eines Objekts.
+function getAlarm() {
+  return getMessages('tickets');
 }
 
 // Zugriff für alle sperren (außer dem festgelegten Inhaber): Sobald der
@@ -227,6 +295,13 @@ module.exports = {
   lockdownGuard,
   getLockdown,
   getAlarm,
+  SITES,
+  SITE_KEYS,
+  listMessages,
+  addMessage,
+  removeMessage,
+  getMessages,
+  migrateLegacyAlarm,
   isHR,
   isHRHR,
   isRoot,

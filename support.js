@@ -151,6 +151,31 @@ function supportHoursLabel() {
   return order.map((d) => `${WEEKDAY_LABELS[d]} ${h.schedule[String(d)].start}–${h.schedule[String(d)].end} Uhr`).join(', ');
 }
 
+// Uebersichtliche Zeitenliste fuer die Anzeige: aufeinanderfolgende Tage mit
+// identischen Zeiten werden zu Bereichen zusammengefasst ("Mo–Fr 09:00–18:00").
+function supportHoursTable() {
+  const h = getSettings().supportHours;
+  if (!h || !h.enabled || !h.schedule || !Object.keys(h.schedule).length) return null;
+  const order = [1, 2, 3, 4, 5, 6, 7].filter((d) => h.schedule[String(d)]);
+  const groups = [];
+  for (const day of order) {
+    const { start, end } = h.schedule[String(day)];
+    const last = groups[groups.length - 1];
+    if (last && last.start === start && last.end === end && last.endDay + 1 === day) {
+      last.endDay = day;
+    } else {
+      groups.push({ startDay: day, endDay: day, start, end });
+    }
+  }
+  return groups.map((g) => ({
+    days: g.startDay === g.endDay
+      ? WEEKDAY_LABELS[g.startDay]
+      : `${WEEKDAY_LABELS[g.startDay]}–${WEEKDAY_LABELS[g.endDay]}`,
+    start: g.start,
+    end: g.end,
+  }));
+}
+
 // "Support-Nummer" – wird einmalig aus den vorhandenen Datenwerten abgeleitet
 // (Tickets, aktive Nutzer, offene Tickets, aktive Bearbeiter) und gespeichert.
 function hotlineNumber() {
@@ -370,6 +395,28 @@ function availableStaffCount() {
   `).get().c;
 }
 
+// Alle eingestempelten, aktiven Mitarbeiter als moegliche Weiterleitungs-Ziele
+// (mit Durchwahl und Busy-Status fuer die gezielte Weiterleitung).
+function transferTargets(excludeUserId) {
+  return db.prepare(`
+    SELECT u.id, u.global_name, u.username, u.extension,
+           EXISTS (
+             SELECT 1 FROM support_calls c
+             WHERE c.staff_id = u.id AND c.status IN ('ringing','active')
+           ) AS busy
+    FROM support_shifts s
+    JOIN users u ON u.id = s.user_id
+    WHERE s.clocked_out_at IS NULL AND u.status = 'active' AND u.role IN ('hr','hrhr')
+      AND u.id != ?
+    ORDER BY u.global_name IS NULL, u.username ASC
+  `).all(excludeUserId).map((r) => ({
+    id: r.id,
+    name: r.global_name || r.username,
+    extension: r.extension != null ? `#${r.extension}` : null,
+    busy: !!r.busy,
+  }));
+}
+
 function waitingQueue() {
   return db.prepare(`
     SELECT c.id, c.caller_id, c.joined_at,
@@ -465,25 +512,52 @@ function acceptCall(staffId, callId) {
   return { ok: true, call: getCall(call.id) };
 }
 
-// Aktiven Anruf an den naechsten freien Mitarbeiter weiterleiten. Der Anrufer
-// bleibt vorn in der Warteschlange und wird direkt neu zugewiesen; wenn kein
-// anderer frei ist, wartet er dort auf die naechste Annahme.
-function transferCall(staffId, callId) {
+// Aktiven Anruf weiterleiten. Mit `targetStaffId` erfolgt eine gezielte
+// Weiterleitung an einen bestimmten Mitarbeiter (mit Busy-Check); ohne Auswahl
+// geht der Anruf zurück in die Warteschlange (Anrufer bleibt vorn) und wird
+// an den nächsten freien Mitarbeiter zugewiesen.
+function transferCall(staffId, callId, targetStaffId) {
   const call = getCall(callId);
   if (!call) return { ok: false, reason: 'notfound' };
   if (call.staff_id !== staffId) return { ok: false, reason: 'forbidden' };
   if (!['ringing', 'active'].includes(call.status)) return { ok: false, reason: 'invalid' };
   const staff = db.prepare('SELECT global_name, username FROM users WHERE id = ?').get(staffId);
   const who = staff ? (staff.global_name || staff.username) : 'Ein Mitarbeiter';
+
+  if (targetStaffId) {
+    const target = db.prepare(`
+      SELECT u.id, u.global_name, u.username, u.role, u.status,
+             EXISTS (
+               SELECT 1 FROM support_shifts s WHERE s.user_id = u.id AND s.clocked_out_at IS NULL
+             ) AS clocked
+      FROM users u WHERE u.id = ?
+    `).get(targetStaffId);
+    const targetName = target ? (target.global_name || target.username) : 'Mitarbeiter';
+    if (!target || !['hr', 'hrhr'].includes(target.role) || target.status !== 'active' || !target.clocked) {
+      return { ok: false, reason: 'unavailable', targetName };
+    }
+    if (target.id === staffId) return { ok: false, reason: 'invalid' };
+    if (currentHandledCall(target.id)) return { ok: false, reason: 'busy', targetName };
+    getOrAssignExtension(target.id);
+    db.prepare(`
+      UPDATE support_calls
+      SET staff_id = ?, status = 'ringing', assigned_at = ?, started_at = NULL,
+          offer_staff = NULL, answer_caller = NULL, transfer_target_id = ?
+      WHERE id = ?
+    `).run(target.id, nowIso(), target.id, call.id);
+    whatsappNotify(`${who} hat ${callDisplayNumber(call.id)} gezielt an ${targetName} weitergeleitet.`);
+    return { ok: true, targeted: true, targetId: target.id, targetName, call: getCall(call.id) };
+  }
+
   db.prepare(`
     UPDATE support_calls
     SET staff_id = NULL, status = 'waiting', assigned_at = NULL, started_at = NULL,
-        offer_staff = NULL, answer_caller = NULL
+        offer_staff = NULL, answer_caller = NULL, transfer_target_id = NULL
     WHERE id = ?
   `).run(call.id);
   whatsappNotify(`${who} hat ${callDisplayNumber(call.id)} weitergeleitet – Anrufer bleibt vorn in der Warteschlange.`);
   const assigned = assignWaitingCalls({ excludeStaffId: staffId });
-  return { ok: true, reassigned: assigned > 0 };
+  return { ok: true, targeted: false, reassigned: assigned > 0 };
 }
 
 function endCallInternal(callId, status, reason) {
@@ -613,6 +687,7 @@ function publicState(user) {
     noStaffMessage: settings.noStaffMessage,
     minutesPerCall: settings.minutesPerCall,
     supportHoursLabel: supportHoursLabel(),
+    supportHoursTable: supportHoursTable(),
     supportOpen: openNow.open,
     call: call ? call.id : null,
   };
@@ -656,12 +731,14 @@ function staffState(user) {
     } : null,
     queue,
     busyStaff,
+    transferTargets: transferTargets(user.id),
     history: shiftHistory(user.id),
     ringTimeoutMs: settings.ringTimeoutMs,
     pollMs: settings.pollMs,
     noStaffMessage: settings.noStaffMessage,
     minutesPerCall: settings.minutesPerCall,
     supportHoursLabel: supportHoursLabel(),
+    supportHoursTable: supportHoursTable(),
   };
 }
 
@@ -684,19 +761,27 @@ function runScheduler() {
   }
 
   // Zugeteilter Mitarbeiter nimmt nicht rechtzeitig an -> zurück in die Warteschlange.
+  // Bei gezielter Weiterleitung wird der Anruf stattdessen automatisch beendet,
+  // wenn das gewählte Ziel nicht innerhalb der Klingelzeit annimmt.
   const ringing = db.prepare(`
     SELECT * FROM support_calls WHERE status = 'ringing'
   `).all();
   for (const call of ringing) {
     const assigned = new Date(call.assigned_at).getTime();
-    if (!Number.isNaN(assigned) && now - assigned >= settings.ringTimeoutMs) {
-      db.prepare(`
-        UPDATE support_calls
-        SET staff_id = NULL, status = 'waiting', assigned_at = NULL,
-            offer_staff = NULL, answer_caller = NULL
-        WHERE id = ?
-      `).run(call.id);
+    if (Number.isNaN(assigned) || now - assigned < settings.ringTimeoutMs) continue;
+    if (call.transfer_target_id) {
+      const target = db.prepare('SELECT global_name, username FROM users WHERE id = ?').get(call.transfer_target_id);
+      const name = target ? (target.global_name || target.username) : 'der gewählte Mitarbeiter';
+      endCallInternal(call.id, 'ended', `${name} hat den weitergeleiteten Anruf nicht angenommen`);
+      whatsappNotify(`${callDisplayNumber(call.id)} automatisch beendet – ${name} hat den weitergeleiteten Anruf nicht angenommen.`);
+      continue;
     }
+    db.prepare(`
+      UPDATE support_calls
+      SET staff_id = NULL, status = 'waiting', assigned_at = NULL,
+          offer_staff = NULL, answer_caller = NULL
+      WHERE id = ?
+    `).run(call.id);
   }
 
   // WhatsApp-Hinweise zu wichtigen Situationen (gedeckelt, damit das
@@ -818,6 +903,7 @@ module.exports = {
   callDisplayNumber,
   isSupportOpen,
   supportHoursLabel,
+  supportHoursTable,
   getOrAssignExtension,
   extensionOf,
   isClockedIn,
@@ -837,6 +923,7 @@ module.exports = {
   currentHandledCall,
   waitingQueue,
   availableStaffCount,
+  transferTargets,
   runScheduler,
   listHoldMusic,
   getHoldMusic,

@@ -341,6 +341,7 @@ function migrateSupportCalls() {
   };
   add('offer_staff', 'TEXT');
   add('answer_caller', 'TEXT');
+  add('transfer_target_id', 'INTEGER REFERENCES users(id) ON DELETE SET NULL');
 }
 migrateUsers();
 migrateTickets();

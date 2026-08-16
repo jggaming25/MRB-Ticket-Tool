@@ -21,6 +21,7 @@
   const STAFF = window.SUPPORT_STAFF === true;
   const PUSH_KEY = window.SUPPORT_PUSH_KEY || '';
   const POLL_MS = Math.max(1000, Number(window.SUPPORT_POLL_MS) || 3000);
+  const ANNOUNCE_MS = Math.max(5000, Number(window.SUPPORT_ANNOUNCE_MS) || 30000);
   const STUN_LIST = Array.isArray(window.SUPPORT_STUN) && window.SUPPORT_STUN.length
     ? window.SUPPORT_STUN.map((u) => ({ urls: u }))
     : [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }];
@@ -31,6 +32,24 @@
   function hide(el) { if (el) el.classList.add('hidden'); }
   function text(id, t) { const el = $(id); if (el) el.textContent = t; }
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+  // Uebersichtliche Support-Zeiten: gruppierte Tage als Zeilen (Mo–Fr 09:00–18:00).
+  function renderSupportHours(el, table, label) {
+    if (!el) return;
+    const fallback = label || 'Jederzeit erreichbar';
+    if (!table || !table.length) {
+      el.innerHTML = `<span class="support-hours-anytime">Support-Zeiten: ${esc(fallback)}</span>`;
+      return;
+    }
+    el.innerHTML =
+      '<span class="support-hours-title">Support-Zeiten</span>' +
+      '<span class="support-hours-rows">' +
+      table.map((r) =>
+        `<span class="support-hours-row">` +
+        `<span class="support-hours-days">${esc(r.days)}</span>` +
+        `<span class="support-hours-time">${esc(r.start)}–${esc(r.end)} Uhr</span>` +
+        `</span>`).join('') +
+      '</span>';
+  }
   function fmtTime(iso) {
     if (!iso) return '–';
     const d = new Date(iso.endsWith('Z') ? iso : iso.replace(' ', 'T') + 'Z');
@@ -196,6 +215,76 @@
     };
   }
 
+  // ---- KI-Ansagen in der Warteschleife (deutsch + englisch) -----------------
+  // Sagt in regelmässigen Abständen die Position und die Anzahl verfügbarer
+  // Mitarbeiter an. Läuft nur, solange der Anrufer in der Warteschleife ist.
+  function Announcer() {
+    let muted = false;
+    let timer = null;
+    let enTimer = null;
+    let lastStatus = null;
+    const voices = window.speechSynthesis ? window.speechSynthesis.getVoices() : [];
+
+    function voiceFor(lang) {
+      if (!voices.length) {
+        // getVoices() kann initial leer sein -> beim onvoiceschanged nachladen
+        const all = window.speechSynthesis ? window.speechSynthesis.getVoices() : [];
+        return all.find((v) => v.lang && v.lang.toLowerCase().startsWith(lang)) || null;
+      }
+      return voices.find((v) => v.lang && v.lang.toLowerCase().startsWith(lang)) || null;
+    }
+
+    function speak(text, lang) {
+      if (!window.speechSynthesis || muted) return;
+      try {
+        const u = new SpeechSynthesisUtterance(text);
+        u.lang = lang;
+        u.rate = 0.95;
+        u.pitch = 1;
+        const v = voiceFor(lang);
+        if (v) u.voice = v;
+        window.speechSynthesis.speak(u);
+      } catch (e) { /* Sprachsynthese nicht verfügbar */ }
+    }
+
+    function say(status) {
+      if (muted || !status) return;
+      lastStatus = status;
+      const avail = status.availableStaff != null ? status.availableStaff : status.available;
+      const pos = status.queuePosition || 1;
+      const de = avail > 0
+        ? `Vielen Dank für Ihren Anruf beim MRB Support. Sie sind Position ${pos} in der Warteschleife. Es sind derzeit ${avail} Mitarbeiter verfügbar. Bitte bleiben Sie am Apparat.`
+        : 'Es ist derzeit kein Mitarbeiter verfügbar. Bitte bleiben Sie am Apparat. Ihr Anruf wird verbunden, sobald ein Mitarbeiter frei wird.';
+      const en = avail > 0
+        ? `Thank you for calling MRB support. You are number ${pos} in the queue. There are currently ${avail} staff members available. Please hold.`
+        : 'No staff members are available right now. Please stay on the line. Your call will be connected as soon as a staff member becomes available.';
+      speak(de, 'de-DE');
+      // Englische Ansage nach der deutschen abspielen
+      if (enTimer) clearTimeout(enTimer);
+      enTimer = setTimeout(() => speak(en, 'en-US'), 5000);
+    }
+
+    this.isMuted = () => muted;
+    this.setMuted = (m) => {
+      muted = !!m;
+      if (muted && window.speechSynthesis) window.speechSynthesis.cancel();
+    };
+    this.update = (status) => { lastStatus = status; };
+    this.start = (status) => {
+      this.stop();
+      lastStatus = status;
+      say(status);
+      timer = setInterval(() => say(lastStatus), ANNOUNCE_MS);
+    };
+    this.stop = () => {
+      if (timer) { clearInterval(timer); timer = null; }
+      if (enTimer) { clearTimeout(enTimer); enTimer = null; }
+      if (window.speechSynthesis) {
+        try { window.speechSynthesis.cancel(); } catch (e) { /* ignore */ }
+      }
+    };
+  }
+
   function playEndTone() {
     try {
       const ctx = new (window.AudioContext || window.webkitAudioContext)();
@@ -250,6 +339,10 @@
       this.audioEl = document.createElement('audio');
       this.audioEl.autoplay = true;
       this.audioEl.srcObject = this.remoteStream;
+      // Muss im DOM sein, damit der Browser das entfernte Audio abspielt.
+      this.audioEl.style.display = 'none';
+      this.audioEl.setAttribute('playsinline', '');
+      document.body.appendChild(this.audioEl);
       this.audioEl.play().catch(() => {});
     },
     setMuted(m) {
@@ -268,7 +361,7 @@
       });
     },
     cleanup() {
-      if (this.audioEl) { try { this.audioEl.pause(); } catch (e) { /* ignore */ } this.audioEl.srcObject = null; this.audioEl = null; }
+      if (this.audioEl) { try { this.audioEl.pause(); } catch (e) { /* ignore */ } this.audioEl.srcObject = null; if (this.audioEl.parentNode) this.audioEl.parentNode.removeChild(this.audioEl); this.audioEl = null; }
       if (this.pc) { try { this.pc.close(); } catch (e) { /* ignore */ } this.pc = null; }
       if (this.localStream) { this.localStream.getTracks().forEach((t) => t.stop()); this.localStream = null; }
       this.remoteStream = null;
@@ -319,6 +412,7 @@
     let clockedIn = false;
     let currentCallId = null;
     let offerSentFor = null;
+    let answerAppliedFor = null;
     let notifiedCalls = {};
 
     function renderShift(st) {
@@ -333,7 +427,7 @@
       text('shiftSince', clockedIn ? `Seit ${fmtTime(st.shiftSince)}` : '');
       text('staffAvailability', `Freie Mitarbeiter: ${st.available}`);
       text('staffHotline', `Support-Nummer: ${st.hotline}`);
-      text('staffHours', st.supportHoursLabel ? `Support-Zeiten: ${st.supportHoursLabel}` : '');
+      renderSupportHours($('staffHours'), st.supportHoursTable, st.supportHoursLabel);
       const hist = st.history || [];
       $('shiftHistory').innerHTML = hist.length
         ? `<ul class="history-list">${hist.map((h) =>
@@ -386,6 +480,7 @@
       if (currentCallId && currentCallId !== callId) {
         CallManager.cleanup();
         offerSentFor = null;
+        answerAppliedFor = null;
       }
       currentCallId = callId;
       const s = await getJson(`/api/support/call/${callId}`);
@@ -395,6 +490,7 @@
       if (c.status === 'ended' || c.status === 'timeout') {
         CallManager.cleanup();
         offerSentFor = null;
+        answerAppliedFor = null;
         renderMyCall({ ended: true, text: c.endedReason || 'Anruf beendet.' });
         return;
       }
@@ -412,6 +508,19 @@
       if (c.status === 'active') {
         myCallStatus = 'active';
         renderMyCall({ status: 'active', display: c.display, callerName: c.callerName, staffExtension: c.staffExtension });
+        // Die Antwort des Anrufers auf unser Angebot einmalig anwenden – erst
+        // dadurch ist die WebRTC-Verbindung (Audio in beide Richtungen) hergestellt.
+        if (c.answer && answerAppliedFor !== callId) {
+          answerAppliedFor = callId;
+          const pc = CallManager.pc;
+          if (pc) {
+            try {
+              await pc.setRemoteDescription(JSON.parse(c.answer));
+            } catch (e) {
+              console.error('Antwort des Anrufers anwenden fehlgeschlagen:', e);
+            }
+          }
+        }
         startRecording(callId);
         CallManager.unmute();
         return;
@@ -420,6 +529,7 @@
     }
 
     let myCallStatus = null;
+    let transferTargets = [];
 
     // Der Mitarbeiter erstellt das SDP-Angebot (er hat durch den Klick auf
     // "Annehmen" die Mikrofon-Freigabe).
@@ -536,8 +646,16 @@
     const transferModal = $('transferModal');
     let transferCb = null;
     function openTransferConfirm(cb) {
-      if (!transferModal) return cb();
+      if (!transferModal) return cb(null);
       transferCb = cb;
+      const sel = $('transferTargetSelect');
+      if (sel) {
+        sel.innerHTML =
+          '<option value="">Nächster freier Mitarbeiter (Warteschlange)</option>' +
+          transferTargets.map((t) =>
+            `<option value="${t.id}" ${t.busy ? 'disabled' : ''}>${esc(t.name)}${t.extension ? ` (${esc(t.extension)})` : ''}${t.busy ? ' – im Gespräch' : ''}</option>`).join('') +
+          (transferTargets.length ? '' : '<option disabled>Kein Mitarbeiter eingestempelt</option>');
+      }
       show(transferModal);
       $('transferOk').addEventListener('click', onTransferOk);
       $('transferCancel').addEventListener('click', onTransferCancel);
@@ -550,8 +668,10 @@
     function onTransferOk() {
       const cb = transferCb;
       transferCb = null;
+      const sel = $('transferTargetSelect');
+      const targetId = sel ? sel.value : '';
       closeTransfer();
-      if (cb) cb();
+      if (cb) cb(targetId || null);
     }
     function onTransferCancel() {
       transferCb = null;
@@ -584,11 +704,24 @@
       });
       const transfer = $('staffTransferBtn');
       if (transfer) transfer.addEventListener('click', () => {
-        openTransferConfirm(async () => {
-          await post(`/api/support/call/${currentCallId}/transfer`);
+        openTransferConfirm(async (targetStaffId) => {
+          const r = await post(`/api/support/call/${currentCallId}/transfer`, targetStaffId ? { targetStaffId } : {});
+          if (!r.ok) {
+            if (r.reason === 'busy') {
+              alert(`${r.targetName || 'Der gewählte Mitarbeiter'} ist gerade im Gespräch – der Anruf wurde nicht weitergeleitet.`);
+            } else if (r.reason === 'unavailable') {
+              alert(`${r.targetName || 'Der gewählte Mitarbeiter'} ist derzeit nicht erreichbar – der Anruf wurde nicht weitergeleitet.`);
+            } else if (r.reason === 'invalid') {
+              alert('Dieser Anruf kann gerade nicht weitergeleitet werden.');
+            } else {
+              alert('Weiterleitung fehlgeschlagen. Bitte erneut versuchen.');
+            }
+            return;
+          }
           CallManager.cleanup();
           currentCallId = null;
           offerSentFor = null;
+          answerAppliedFor = null;
           myCallStatus = null;
           stopRecording();
         });
@@ -599,6 +732,7 @@
         CallManager.cleanup();
         currentCallId = null;
         offerSentFor = null;
+        answerAppliedFor = null;
         myCallStatus = null;
         stopRecording();
       });
@@ -621,6 +755,7 @@
     async function refreshStaff() {
       const st = await getJson('/api/support/staff/state');
       if (!st.hotline) return;
+      if (Array.isArray(st.transferTargets)) transferTargets = st.transferTargets;
       renderShift(st);
       renderQueue(st.queue || []);
       renderBusy(st.busyStaff || []);
@@ -632,6 +767,7 @@
         CallManager.cleanup();
         currentCallId = null;
         offerSentFor = null;
+        answerAppliedFor = null;
         myCallStatus = null;
         stopRecording();
         renderMyCall(null);
@@ -647,11 +783,13 @@
   // ANRUFER-SEITE (/support)
   // =========================================================================
   const waitMusic = new HoldMusic();
+  const announcer = new Announcer();
   let callId = null;
   let answeredOffer = null;   // Fingerabdruck des beantworteten Angebots
   let streamReady = false;
   let timerInt = null;
   let joinedAtMs = null;
+  let announcing = false;
 
   const startBtn = $('startCallBtn');
   const callAgainBtn = $('callAgainBtn');
@@ -659,6 +797,15 @@
   const hangupConnectingBtn = $('hangupConnectingBtn');
   const hangupActiveBtn = $('hangupActiveBtn');
   const muteBtn = $('muteBtn');
+  const announceMuteBtn = $('announceMuteBtn');
+  let announceMuted = false;
+  if (announceMuteBtn) {
+    announceMuteBtn.addEventListener('click', () => {
+      announceMuted = !announceMuted;
+      announcer.setMuted(announceMuted);
+      announceMuteBtn.textContent = announceMuted ? '🔇 Ansagen aus' : '🔊 Ansagen an';
+    });
+  }
 
   function showStage(name) {
     hide($('supportIdle'));
@@ -691,7 +838,7 @@
     const st = await getJson('/api/support/state');
     if (!st.hotline) return;
     text('hotlineNumber', st.hotline);
-    text('supportHoursText', `Support-Zeiten: ${st.supportHoursLabel || 'Jederzeit erreichbar'}`);
+    renderSupportHours($('supportHoursText'), st.supportHoursTable, st.supportHoursLabel || 'Jederzeit erreichbar');
     const closed = st.supportOpen === false;
     const closedBadge = $('closedBadge');
     if (closedBadge) closedBadge.classList.toggle('hidden', !closed);
@@ -740,6 +887,8 @@
     showStage('waiting');
     startTimer();
     waitMusic.start();
+    announcer.start({ queuePosition: 1, availableStaff: null });
+    announcing = true;
     pollCall();
   }
 
@@ -777,6 +926,8 @@
       startTimer();
       // Zurueck in der Warteschlange (z. B. nach Weiterleitung) -> Verbindung zuruecksetzen.
       resetNegotiation();
+      if (!announcing) { announcer.start(c); announcing = true; }
+      else announcer.update(c);
       text('queuePositionText', `Ihre Position in der Warteschlange: ${c.queuePosition}.`);
       if (c.queueWaitMinutes) {
         const escNote = c.queueWaitEscalating
@@ -793,6 +944,8 @@
       showStage('connecting');
       waitMusic.stop();
       stopTimer();
+      announcer.stop();
+      announcing = false;
       if (c.offer && answeredOffer !== c.offer) {
         answeredOffer = c.offer;
         await createAnswer(callId, c.offer);
@@ -803,6 +956,8 @@
       showStage('active');
       waitMusic.stop();
       stopTimer();
+      announcer.stop();
+      announcing = false;
       if (c.staffName) {
         text('activeStaffName', `${c.staffName}${c.staffExtension ? ` (${c.staffExtension})` : ''}`);
       }
@@ -812,6 +967,8 @@
     if (c.status === 'timeout') {
       waitMusic.stop();
       stopTimer();
+      announcer.stop();
+      announcing = false;
       playEndTone();
       text('endedTitle', 'Derzeit kein Mitarbeiter verfügbar');
       text('endedText', c.endedReason || 'Bitte versuchen Sie es später noch einmal.');
@@ -822,6 +979,8 @@
     if (c.status === 'ended') {
       waitMusic.stop();
       stopTimer();
+      announcer.stop();
+      announcing = false;
       text('endedTitle', 'Anruf beendet');
       text('endedText', c.endedReason || 'Vielen Dank für Ihren Anruf.');
       endCleanup();
@@ -835,6 +994,8 @@
     answeredOffer = null;
     streamReady = false;
     joinedAtMs = null;
+    announcing = false;
+    announcer.stop();
     CallManager.cleanup();
   }
 
@@ -844,6 +1005,8 @@
     if (callId) await post('/api/support/call/end', { callId });
     waitMusic.stop();
     stopTimer();
+    announcer.stop();
+    announcing = false;
     endCleanup();
     showStage('idle');
     refreshIdle();

@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="/static/css/style.css?v=<%= assetVersion %>">
   <link rel="icon" href="/static/logo.png">
 </head>
-<body data-user-id="<%= user ? user.id : '' %>" data-notify-enabled="<%= user && user.notify_changes === 1 ? '1' : '0' %>" data-push-key="<%= pushEnabled ? pushPublicKey : '' %>">
+<body data-user-id="<%= user ? user.id : '' %>" data-notify-enabled="<%= user && user.notify_changes === 1 ? '1' : '0' %>" data-push-key="<%= pushEnabled ? pushPublicKey : '' %>" data-is-root="<%= user && isRootUser(user) ? '1' : '0' %>">
   <header class="topbar">
     <div class="container topbar-inner">
       <a class="brand" href="/">
@@ -63,10 +63,12 @@
     <% if (flash) { %>
       <div class="alert <%= flash.type === 'error' ? 'alert-error' : 'alert-success' %>"><%= flash.text %></div>
     <% } %>
-    <% if (itAlarm) { %>
-      <div class="notice-banner">
-        <strong>⚠ Meldung:</strong> <%= itAlarm.text %>
-      </div>
+    <% if (itAlarm && itAlarm.length) { %>
+      <% for (const m of itAlarm) { %>
+        <div class="notice-banner">
+          <strong>⚠ Meldung:</strong> <%= m.text %>
+        </div>
+      <% } %>
     <% } %>
     <% if (lockdown && user && isRootUser(user)) { %>
       <div class="alarm-banner lockdown">

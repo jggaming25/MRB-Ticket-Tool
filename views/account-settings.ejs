@@ -94,21 +94,48 @@
       <hr class="admin-sep">
 
       <h3>Meldungen</h3>
-      <% if (adminData.alarm && adminData.alarm.active) { %>
-        <p class="hint">Meldung ist <strong>aktiv</strong>: „<%= adminData.alarm.text %>" – sie wird oben auf allen Seiten gelb angezeigt (ohne Ton).</p>
-        <form method="post" action="/account/settings/admin/alarm" class="inline-form">
-          <input type="hidden" name="action" value="clear">
-          <button type="submit" class="btn btn-ghost">Meldung entfernen</button>
-        </form>
+      <p class="hint">Zeigt oben auf den ausgewählten Websites einen gelben Hinweis-Banner – ohne Ton, ohne Sperre. Mehrere Meldungen können gleichzeitig aktiv sein.</p>
+      <% if (adminData.alarms && adminData.alarms.length) { %>
+        <ul class="admin-messages">
+          <% for (const m of adminData.alarms) { %>
+            <li class="admin-message">
+              <div>
+                <div class="admin-message-text">„<%= m.text %>"</div>
+                <div class="admin-message-meta">
+                  <% if (m.websites && m.websites.length) { %>
+                    <%= m.websites.map((w) => adminData.sites[w] || w).join(', ') %>
+                  <% } else { %>
+                    alle Websites
+                  <% } %>
+                  <% if (m.set_at) { %> · <%= fmtDate(m.set_at) %><% } %>
+                </div>
+              </div>
+              <form method="post" action="/account/settings/admin/alarm" class="inline-form">
+                <input type="hidden" name="action" value="remove">
+                <input type="hidden" name="id" value="<%= m.id %>">
+                <button type="submit" class="btn btn-ghost btn-sm" data-confirm="Diese Meldung entfernen?">Entfernen</button>
+              </form>
+            </li>
+          <% } %>
+        </ul>
       <% } else { %>
-        <p class="hint">Zeigt oben auf allen Seiten einen gelben Hinweis-Banner für alle eingeloggten Nutzer – ohne Ton, ohne Sperre.</p>
-        <form method="post" action="/account/settings/admin/alarm" class="admin-form">
-          <input type="hidden" name="action" value="set">
-          <label class="small">Meldungstext *</label>
-          <input type="text" name="text" class="input" required placeholder="z. B. Achtung: Wartungsarbeiten am Freitag 18–20 Uhr">
-          <button type="submit" class="btn btn-primary">Meldung anzeigen</button>
-        </form>
+        <p class="hint">Aktuell ist keine Meldung aktiv.</p>
       <% } %>
+      <form method="post" action="/account/settings/admin/alarm" class="admin-form">
+        <input type="hidden" name="action" value="set">
+        <label class="small">Meldungstext *</label>
+        <input type="text" name="text" class="input" required placeholder="z. B. Achtung: Wartungsarbeiten am Freitag 18–20 Uhr">
+        <label class="small">Anzeigen auf (ohne Auswahl = alle Websites)</label>
+        <div class="checkbox-row">
+          <% for (const key of Object.keys(adminData.sites)) { %>
+            <label class="checkbox-label">
+              <input type="checkbox" name="websites" value="<%= key %>">
+              <%= adminData.sites[key] %>
+            </label>
+          <% } %>
+        </div>
+        <button type="submit" class="btn btn-primary">Meldung anzeigen</button>
+      </form>
 
       <hr class="admin-sep">
 

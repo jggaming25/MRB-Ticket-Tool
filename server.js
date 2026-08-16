@@ -29,6 +29,13 @@ const {
   lockdownGuard,
   getLockdown,
   getAlarm,
+  SITES,
+  SITE_KEYS,
+  listMessages,
+  addMessage,
+  removeMessage,
+  getMessages,
+  migrateLegacyAlarm,
   isHR,
   isHRHR,
   isRoot,
@@ -687,7 +694,9 @@ app.get('/account/settings', requireLogin, (req, res) => {
     adminData: isRoot(req.user) ? {
       lockdown: getLockdown(),
       lockdownDefaultMsg: config.lockdownMessage,
+      alarms: listMessages(),
       alarm: getAlarm(),
+      sites: SITES,
       backups: backups.listBackups(),
       backupSlotsFree: backups.slotsFree(),
       backupMax: backups.maxSlots(),
@@ -724,43 +733,57 @@ app.post('/account/settings/admin/lockdown', requireRoot, (req, res) => {
     }));
     logAccountAction(req.user.id, req.user.id, 'lockdown_enabled', 'IT-Alarm ausgelöst (Zugriff für alle Bearbeiter gesperrt, nur Inhaber darf einloggen).');
     const who = req.user.global_name || req.user.username;
-    whatsapp.sendMessage(`🚨 IT-ALARM ausgelöst von ${who}: ${message}`);
+    whatsapp.sendImportant(`🚨 IT-ALARM ausgelöst von ${who}: ${message}`);
     flash(req, 'success', 'IT-Alarm ausgelöst. Alle eingeloggten Bearbeiter sehen die rote Meldung und werden abgemeldet.');
   } else {
     setSetting('system_lockdown', '');
     logAccountAction(req.user.id, req.user.id, 'lockdown_disabled', 'IT-Alarm beendet, Zugriff für Bearbeiter wieder freigegeben.');
     const who = req.user.global_name || req.user.username;
-    whatsapp.sendMessage(`✅ IT-Alarm beendet von ${who}. Der Zugriff ist wieder für alle möglich.`);
+    whatsapp.sendImportant(`✅ IT-Alarm beendet von ${who}. Der Zugriff ist wieder für alle möglich.`);
     flash(req, 'success', 'IT-Alarm beendet. Der Zugriff ist wieder für alle möglich.');
   }
   res.redirect('/account/settings');
 });
 
-// Meldungen: einfacher Hinweis-Banner (gelb) oben auf allen Seiten – ohne Ton,
-// ohne Sperre. Nur Text für alle eingeloggten Nutzer.
+// Meldungen: Hinweis-Banner (gelb) oben – ohne Ton, ohne Sperre. Mehrere
+// Meldungen möglich, jede gezielt für eine Auswahl an Websites (tickets,
+// anwesenheit, befehl). Ohne Website-Auswahl gilt die Meldung für alle.
 app.post('/account/settings/admin/alarm', requireRoot, (req, res) => {
-  if (req.body.action === 'set') {
+  const action = req.body.action;
+  if (action === 'set') {
     const text = String(req.body.text || '').trim();
     if (!text) {
       flash(req, 'error', 'Bitte gib einen Meldungstext ein.');
       return res.redirect('/account/settings');
     }
-    setSetting('it_alarm', JSON.stringify({
-      active: true,
+    // Eine einzelne Checkbox kommt als String, mehrere als Array.
+    const rawWebsites = req.body.websites;
+    const websiteList = Array.isArray(rawWebsites) ? rawWebsites : (rawWebsites ? [rawWebsites] : []);
+    const websites = [...new Set(websiteList.filter((w) => SITE_KEYS.includes(w)))];
+    const messages = addMessage({
       text,
+      websites,
       set_by: req.user.id,
       set_at: new Date().toISOString(),
-    }));
-    logAccountAction(req.user.id, req.user.id, 'alarm_set', 'Meldung angezeigt.');
+    });
+    const targets = websites.length ? websites.map((w) => SITES[w]).join(', ') : 'alle Websites';
+    logAccountAction(req.user.id, req.user.id, 'alarm_set', `Meldung angezeigt (${targets}).`);
     const who = req.user.global_name || req.user.username;
-    notifyChangesWhatsApp(`📢 Meldung gesetzt von ${who}: ${text.slice(0, 120)}`);
-    flash(req, 'success', 'Meldung wird oben auf allen Seiten angezeigt.');
-  } else {
-    setSetting('it_alarm', '');
+    whatsapp.sendImportant(`📢 Meldung gesetzt von ${who} (${targets}): ${text.slice(0, 120)}`);
+    flash(req, 'success', `Meldung wird oben angezeigt (${targets}).`);
+  } else if (action === 'remove' && req.body.id) {
+    removeMessage(String(req.body.id));
     logAccountAction(req.user.id, req.user.id, 'alarm_cleared', 'Meldung entfernt.');
     const who = req.user.global_name || req.user.username;
-    notifyChangesWhatsApp(`🗑 Meldung entfernt von ${who}`);
+    whatsapp.sendImportant(`🗑 Meldung entfernt von ${who}`);
     flash(req, 'success', 'Meldung entfernt.');
+  } else {
+    // clear: alle Meldungen entfernen (Rückwärtskompatibilität)
+    for (const m of listMessages()) removeMessage(m.id);
+    logAccountAction(req.user.id, req.user.id, 'alarm_cleared', 'Alle Meldungen entfernt.');
+    const who = req.user.global_name || req.user.username;
+    whatsapp.sendImportant(`🗑 Alle Meldungen entfernt von ${who}`);
+    flash(req, 'success', 'Alle Meldungen entfernt.');
   }
   res.redirect('/account/settings');
 });
@@ -1103,12 +1126,12 @@ app.get('/support', requireLogin, (req, res) => {
     return renderError(res, 503, 'Derzeit geschlossen',
       `${closedLabel}. Erreichbarkeit: ${support.supportHoursLabel()}`);
   }
-  res.render('support', { title: 'Voice-Support', staff: false, pollMs: s.pollMs, stunServers: s.stunServers });
+  res.render('support', { title: 'Voice-Support', staff: false, pollMs: s.pollMs, announceMs: s.announcementIntervalMs, stunServers: s.stunServers });
 });
 
 app.get('/support/staff', requireLogin, requireHR, (req, res) => {
   const s = support.getSettings();
-  res.render('support', { title: 'Voice-Support – Mitarbeiter', staff: true, pollMs: s.pollMs, stunServers: s.stunServers });
+  res.render('support', { title: 'Voice-Support – Mitarbeiter', staff: true, pollMs: s.pollMs, announceMs: s.announcementIntervalMs, stunServers: s.stunServers });
 });
 
 // Öffentlicher Status der Hotline (Hotline-Nummer, freie Mitarbeiter).
@@ -1143,13 +1166,19 @@ app.post('/api/support/call/:id/accept', requireLogin, requireHR, (req, res) => 
   res.json(support.acceptCall(req.user.id, callId));
 });
 
-// Aktiven Anruf an den nächsten freien Mitarbeiter weiterleiten.
+// Aktiven Anruf weiterleiten – gezielt an einen bestimmten Mitarbeiter oder
+// (ohne Auswahl) an den nächsten freien.
 app.post('/api/support/call/:id/transfer', requireLogin, requireHR, (req, res) => {
   const callId = Number(req.params.id);
   if (!Number.isInteger(callId) || callId <= 0) {
     return res.status(400).json({ ok: false, reason: 'invalid' });
   }
-  res.json(support.transferCall(req.user.id, callId));
+  const rawTarget = req.body && req.body.targetStaffId;
+  const targetStaffId = rawTarget === '' || rawTarget == null ? null : Number(rawTarget);
+  if (targetStaffId != null && (!Number.isInteger(targetStaffId) || targetStaffId <= 0)) {
+    return res.status(400).json({ ok: false, reason: 'invalid' });
+  }
+  res.json(support.transferCall(req.user.id, callId, targetStaffId));
 });
 
 // Anruf starten (legt ggf. Warteschlangen-Eintrag an / weist zu).
@@ -1228,10 +1257,13 @@ app.get('/', (req, res) => {
 // Öffentlicher Status-Endpoint für die anderen Apps (Anwesenheits-Tool,
 // MRB-OnlineBefehl): Sie prüfen hier, ob der Inhaber die Zugriffssperre
 // (Lockdown / IT-Alarm) ausgelöst hat und sperren sich dann selbst.
+// Optionaler Parameter ?site=tickets|anwesenheit|befehl filtert die Meldungen
+// auf die jeweilige Website (Meldungen ohne Website-Auswahl gelten für alle).
 app.get('/api/status', (req, res) => {
   const lock = getLockdown();
-  const alarm = getAlarm();
-  const alarmActive = alarm && alarm.text ? alarm : null;
+  const site = String(req.query.site || '').trim();
+  const messages = getMessages(site || undefined);
+  const alarmActive = messages.length ? messages[0] : null;
   res.set('Access-Control-Allow-Origin', '*');
   res.set('Cache-Control', 'no-store');
   res.json({
@@ -1245,6 +1277,16 @@ app.get('/api/status', (req, res) => {
       set_at: (lock && lock.set_at) || null,
     },
     // Meldungen (früher "IT-Alarm"): nur Hinweis-Banner (gelb), ohne Sperre.
+    // meldungen = alle für diese Website relevanten Meldungen.
+    meldungen: messages.map((m) => ({
+      id: m.id,
+      active: true,
+      text: m.text,
+      websites: m.websites || [],
+      set_by: m.set_by || null,
+      set_at: m.set_at || null,
+    })),
+    // Rückwärtskompatible Einzelfelder (erste passende Meldung).
     meldung: {
       active: !!alarmActive,
       text: (alarmActive && alarmActive.text) || '',
@@ -2484,6 +2526,7 @@ function markAllOverdue() {
 if (require.main === module) {
   markAllOverdue();
   migrateScheduledTimes();
+  migrateLegacyAlarm();
   // Account-Scheduler: automatische Freigaben/Löschungen alle 60 Sekunden
   runAccountScheduler();
   setInterval(runAccountScheduler, 60 * 1000);

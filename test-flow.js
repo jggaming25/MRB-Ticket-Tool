@@ -714,6 +714,7 @@ function findMail(subjectPart) {
   ok('Meldung: durch Inhaber gesetzt', r.status === 302);
   r = await get('/', lockUser);
   ok('Meldung: gelber Banner oben ohne Ton/Auto-Logout', r.body.includes('Meldung') && r.body.includes('Wartung am Freitag') && r.body.includes('notice-banner') && !r.body.includes('data-countdown'));
+  ok('Meldung: normaler Nutzer nicht als Root markiert (data-is-root=0)', r.body.includes('data-is-root="0"'));
   r = await get('/api/status');
   let statusJson = JSON.parse(r.body);
   ok('API-Status: Meldung aktiv (ohne Sperre)', statusJson.meldung && statusJson.meldung.active === true && !statusJson.meldung.locked, r.body.slice(0, 160));
@@ -721,6 +722,61 @@ function findMail(subjectPart) {
   ok('Meldung: durch Inhaber entfernt', r.status === 302);
   r = await get('/');
   ok('Meldung: Banner nach Entfernen weg', !r.body.includes('Wartung am Freitag'));
+
+  // Mehrere Meldungen + Website-Auswahl
+  const postAlarm = async (cookie, pairs) => {
+    const sp = new URLSearchParams();
+    for (const [k, v] of pairs) sp.append(k, v);
+    const resp = await fetch(base + '/account/settings/admin/alarm', {
+      method: 'POST',
+      headers: { cookie: cookie || '', 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: sp,
+      redirect: 'manual',
+    });
+    return resp.status;
+  };
+  r = await post('/account/settings/admin/alarm', { action: 'set', text: 'Server-Neustart am Sonntag' }, hrhrCookie);
+  ok('Meldungen: Meldung fuer alle Websites gesetzt', r.status === 302);
+  r = await postAlarm(hrhrCookie, [['action', 'set'], ['text', 'Wartung im Ticket-System'], ['websites', 'tickets']]);
+  ok('Meldungen: Meldung nur fuer Ticket-System gesetzt', r === 302);
+  r = await postAlarm(hrhrCookie, [['action', 'set'], ['text', 'Störung im Befehlstool'], ['websites', 'befehl']]);
+  ok('Meldungen: Meldung nur fuer MRB-OnlineBefehl gesetzt', r === 302);
+  r = await get('/', lockUser);
+  ok('Meldungen: Ticket-System zeigt nur passende Meldungen', r.body.includes('Server-Neustart am Sonntag') && r.body.includes('Wartung im Ticket-System') && !r.body.includes('Störung im Befehlstool'), r.body.slice(0, 120));
+  r = await get('/api/status');
+  statusJson = JSON.parse(r.body);
+  ok('Meldungen: API liefert alle 3 Meldungen', Array.isArray(statusJson.meldungen) && statusJson.meldungen.length === 3, r.body.slice(0, 200));
+  r = await get('/api/status?site=anwesenheit');
+  statusJson = JSON.parse(r.body);
+  ok('Meldungen: Anwesenheits-Tool sieht nur All-Website-Meldung', statusJson.meldungen.length === 1 && statusJson.meldungen[0].text === 'Server-Neustart am Sonntag', JSON.stringify(statusJson.meldungen));
+  r = await get('/api/status?site=befehl');
+  statusJson = JSON.parse(r.body);
+  ok('Meldungen: MRB-OnlineBefehl sieht All + eigene Meldung', statusJson.meldungen.length === 2 && statusJson.meldungen.some((m) => m.text === 'Störung im Befehlstool'), JSON.stringify(statusJson.meldungen));
+  r = await get('/account/settings', hrhrCookie);
+  ok('Meldungen: Admin-UI listet alle Meldungen mit Website-Zielen', r.body.includes('Server-Neustart am Sonntag') && r.body.includes('Störung im Befehlstool') && r.body.includes('MRB-OnlineBefehl'), r.body.slice(0, 200));
+  r = await get('/api/status');
+  statusJson = JSON.parse(r.body);
+  const befehlMsg = statusJson.meldungen.find((m) => m.text === 'Störung im Befehlstool');
+  r = await postAlarm(hrhrCookie, [['action', 'remove'], ['id', befehlMsg.id]]);
+  ok('Meldungen: einzelne Meldung per id entfernt', r === 302);
+  r = await get('/api/status?site=befehl');
+  statusJson = JSON.parse(r.body);
+  ok('Meldungen: entfernte Meldung verschwindet aus API', statusJson.meldungen.length === 1 && !statusJson.meldungen.some((m) => m.text === 'Störung im Befehlstool'), JSON.stringify(statusJson.meldungen));
+  r = await post('/account/settings/admin/alarm', { action: 'clear' }, hrhrCookie);
+  ok('Meldungen: alle Meldungen entfernt', r.status === 302);
+  r = await get('/');
+  ok('Meldungen: keine Banner mehr', !r.body.includes('notice-banner'));
+
+  // WhatsApp-Pflichtbenachrichtigung: sendImportant versucht bei Fehlschlag erneut
+  const whatsappModule = require('./whatsapp');
+  const origWASend = whatsappModule.sendMessage;
+  whatsappModule.sendMessage = (() => { let n = 0; return () => Promise.resolve(n++ === 0 ? false : true); })();
+  const retriedOk = await whatsappModule.sendImportant('⚠ Test-Pflichtmeldung', { waits: [5] });
+  ok('WhatsApp-Pflicht: sendImportant versucht es erneut und kommt durch', retriedOk === true);
+  whatsappModule.sendMessage = () => Promise.resolve(false);
+  const exhausted = await whatsappModule.sendImportant('⚠ Test-Pflichtmeldung 2', { waits: [1] });
+  ok('WhatsApp-Pflicht: nach letztem Fehlversuch ohne Erfolg beendet', exhausted === false);
+  whatsappModule.sendMessage = origWASend;
 
   // IT-Alarm (früher "Zugriff sperren"): rote Vollbild-Meldung + Ton + Sperre
   r = await post('/account/settings/admin/lockdown', { action: 'enable', message: 'Wegen Wartung' }, hrhrCookie);
@@ -734,6 +790,9 @@ function findMail(subjectPart) {
   ok('IT-Alarm: Login-Seite zeigt Sperrmeldung + Endlos-Sirene', r.body.includes('Wegen Wartung') && r.body.includes('IT-Alarm') && r.body.includes('startSiren'));
   r = await get('/dashboard', hrhrCookie);
   ok('IT-Alarm: Inhaber hat weiterhin Zugriff + hoert die Endlos-Sirene', r.status === 200 && r.body.includes('Meine Tickets') && r.body.includes('isRootUser = true') && r.body.includes('startSiren') && r.body.includes('stopSiren'), `${r.status}`);
+  ok('IT-Alarm: Inhaber als Root markiert (data-is-root=1)', r.body.includes('data-is-root="1"'));
+  r = await get('/static/js/main.js');
+  ok('F12-Schutz: main.js enthaelt Click-/Overlay-Schutz', r.status === 200 && r.body.includes('setupLockdownProtection') && r.body.includes('contextmenu') && r.body.includes('MutationObserver') && r.body.includes('it-alarm-overlay'));
   r = await post('/account/settings/admin/lockdown', { action: 'disable' }, hrhrCookie);
   ok('IT-Alarm: durch Inhaber beendet', r.status === 302);
   r = await get('/api/status');
@@ -797,6 +856,8 @@ function findMail(subjectPart) {
   // ==================================================================
   r = await get('/support', userCookie);
   ok('Support: Anrufer-Seite erreichbar, Hotline + Anruf-Button', r.status === 200 && r.body.includes('Voice-Support') && r.body.includes('support.js'));
+  ok('Support: Ansage-Intervall wird an den Client geliefert', r.body.includes('window.SUPPORT_ANNOUNCE_MS = 30000') && r.body.includes('id="announceMuteBtn"'));
+  ok('Support: Aufzeichnungs-Hinweis lesbar strukturiert', r.body.includes('class="recording-badge"') && r.body.includes('class="recording-title"') && r.body.includes('class="recording-detail"'));
 
   r = await get('/support/staff', userCookie);
   ok('Support: Mitarbeiter-Konsole fuer normale Nutzer verweigert (403)', r.status === 403);
@@ -809,6 +870,10 @@ function findMail(subjectPart) {
 
   r = await get('/support/staff', hrCookie);
   ok('Support: Mitarbeiter-Konsole fuer Team erreichbar', r.status === 200 && r.body.includes('Mitarbeiter-Konsole'));
+  ok('Support: Weiterleitungs-Dialog bietet Ziel-Auswahl an', r.body.includes('id="transferTargetSelect"'));
+  r = await get('/static/js/support.js', userCookie);
+  ok('Support: Anruf wendet die Antwort des Anrufers an (beidseitiges Audio)',
+    r.status === 200 && r.body.includes('answerAppliedFor') && r.body.includes('setRemoteDescription(JSON.parse(c.answer))'));
 
   r = await postJson('/api/support/clockin', {}, hrCookie);
   ok('Support: HR stempelt sich ein', JSON.parse(r.body).ok === true);
@@ -886,6 +951,48 @@ function findMail(subjectPart) {
   const reaccept = support.acceptCall(hrUser.id, callId);
   ok('Support: Anruf nach Weiterleitung erneut annehmbar', reaccept.ok === true);
 
+  // Gezielte Weiterleitung: Ziel-Auswahl, Busy-Check, Auto-Beenden.
+  await postJson('/api/support/clockin', {}, hrhrCookie);
+  r = await get('/api/support/staff/state', hrCookie);
+  st = JSON.parse(r.body);
+  ok('Support: Staff-State listet Weiterleitungs-Ziele mit Busy-Status',
+    r.status === 200 && Array.isArray(st.transferTargets) && st.transferTargets.some((t) => t.id === hrhrUser.id && t.busy === false));
+
+  // Gezielt an den (freien) Inhaber weiterleiten -> Anruf klingelt dort.
+  r = await postJson(`/api/support/call/${callId}/transfer`, { targetStaffId: String(hrhrUser.id) }, hrCookie);
+  const tr2 = JSON.parse(r.body);
+  const trRow2 = db.prepare('SELECT status, staff_id FROM support_calls WHERE id = ?').get(callId);
+  ok('Support: gezielte Weiterleitung klingelt beim gewaehlten Mitarbeiter',
+    tr2.ok === true && tr2.targeted === true && trRow2.status === 'ringing' && trRow2.staff_id === hrhrUser.id);
+
+  // Busy-Check: Ziel ist bereits im Gespraech -> gezielte Weiterleitung abgelehnt.
+  support.acceptCall(hrhrUser.id, callId);
+  const hrAsCaller = support.startCall(hrUser.id);
+  support.acceptCall(hrUser.id, hrAsCaller.call.id);
+  const busyTransfer = support.transferCall(hrUser.id, hrAsCaller.call.id, hrhrUser.id);
+  ok('Support: Busy-Check verhindert Weiterleitung an beschaeftigtes Ziel',
+    busyTransfer.ok === false && busyTransfer.reason === 'busy' && !!busyTransfer.targetName);
+  support.endCall(hrUser.id, hrAsCaller.call.id);
+
+  // Auto-Beenden: Das Ziel nimmt nicht an -> der Anruf endet automatisch.
+  const autoTransfer = support.transferCall(hrhrUser.id, callId, hrUser.id);
+  ok('Support: gezielte Weiterleitung an freien HR moeglich', autoTransfer.ok === true && autoTransfer.targeted === true);
+  db.prepare('UPDATE support_calls SET assigned_at = ? WHERE id = ?')
+    .run(new Date(Date.now() - 10 * 60 * 1000).toISOString(), callId);
+  support.runScheduler();
+  const autoRow = db.prepare('SELECT status, staff_id, ended_reason FROM support_calls WHERE id = ?').get(callId);
+  ok('Support: Auto-Beenden nach erfolgloser gezielter Weiterleitung',
+    autoRow.status === 'ended' && /nicht angenommen/.test(autoRow.ended_reason || ''));
+
+  // Fuer die Aufzeichnungs-Tests: Anruf wieder an den HR uebergeben (ringing).
+  db.prepare(`
+    UPDATE support_calls
+    SET staff_id = ?, status = ?, assigned_at = NULL, offer_staff = NULL,
+        answer_caller = NULL, transfer_target_id = NULL
+    WHERE id = ?
+  `).run(hrUser.id, 'ringing', callId);
+  await postJson('/api/support/clockout', {}, hrhrCookie);
+
   // Anruf beenden (Anrufer)
   r = await postJson('/api/support/call/end', { callId }, userCookie);
   ok('Support: Anrufer beendet Anruf', JSON.parse(r.body).ok === true);
@@ -906,7 +1013,8 @@ function findMail(subjectPart) {
 
   const savedSupport = JSON.parse(getSetting('support_settings'));
   ok('Support: Klingelzeit gespeichert (30 s -> 30000 ms)', savedSupport.ringTimeoutMs === 30000);
-  ok('Support: kein Ansage-Intervall mehr vorhanden', savedSupport.announcementIntervalMs === undefined);
+  ok('Support: Ansage-Intervall ist in den Einstellungen verfügbar (Konfiguration)', support.getSettings().announcementIntervalMs === 30000);
+  ok('Support: Ansage-Intervall nicht im Formular speicherbar', savedSupport.announcementIntervalMs === undefined);
   ok('Support: Vorwahl gespeichert', savedSupport.hotlinePrefix === '0900');
 
   const newHotline = support.hotlineNumber();
@@ -938,6 +1046,30 @@ function findMail(subjectPart) {
   support.saveSettings({ supportHoursEnabled: '0', supportHoursSchedule: allDays });
   ok('Support: Zeiten deaktiviert -> wieder erreichbar', support.isSupportOpen().open === true);
 
+  // Uebersichtliche Zeiten-Anzeige: aufeinanderfolgende Tage mit gleicher Zeit
+  // werden zu Bereichen zusammengefasst (Mo–Fr), unterschiedliche getrennt.
+  support.saveSettings({
+    supportHoursEnabled: '1',
+    supportHoursSchedule: {
+      '1': { start: '09:00', end: '18:00' },
+      '2': { start: '09:00', end: '18:00' },
+      '3': { start: '09:00', end: '18:00' },
+      '4': { start: '09:00', end: '18:00' },
+      '5': { start: '09:00', end: '18:00' },
+      '6': { start: '10:00', end: '14:00' },
+    },
+  });
+  const hoursTable = support.supportHoursTable();
+  ok('Support: aufeinanderfolgende Tage werden zu Bereich zusammengefasst',
+    hoursTable && hoursTable.some((g) => g.days === 'Mo–Fr' && g.start === '09:00' && g.end === '18:00'));
+  ok('Support: abweichender Tag bleibt eigene Zeile',
+    hoursTable && hoursTable.some((g) => g.days === 'Sa' && g.start === '10:00' && g.end === '14:00'));
+  r = await get('/api/support/state', userCookie);
+  st = JSON.parse(r.body);
+  ok('Support: API liefert strukturierte Zeitenliste',
+    r.status === 200 && Array.isArray(st.supportHoursTable) && st.supportHoursTable.length > 0);
+  support.saveSettings({ supportHoursEnabled: '0', supportHoursSchedule: allDays });
+
   // Mitarbeiter-Abfrage: Schichtzeiten + Aktivitaeten per Durchwahl abrufen.
   r = await get('/account/settings/admin/employee', hrhrCookie);
   ok('Abfrage: Mitarbeiter-Formular erreichbar', r.status === 200 && r.body.includes('Mitarbeiter-Abfrage'));
@@ -947,9 +1079,6 @@ function findMail(subjectPart) {
     && r.body.includes('Schichtzeiten') && r.body.includes((hrUser.global_name || hrUser.username)));
   r = await get('/account/settings/admin/employee?number=999999', hrhrCookie);
   ok('Abfrage: unbekannte Nummer zeigt Hinweis', r.status === 200 && r.body.includes('Kein Mitarbeiter'));
-
-  // Support-Zeiten pro Tag: Heute (nicht konfigurierter Tag) ist geschlossen,
-  // Anruf wird abgelehnt; ohne Zeiten ist man immer erreichbar.
 
   // Warteschleifenmusik: Song hinzufügen, listen, laden und löschen
   const songId = support.addHoldMusic({ name: 'test-song.mp3', mime: 'audio/mpeg', size: 4, data: Buffer.from([0x1, 0x2, 0x3, 0x4]), userId: 1 });

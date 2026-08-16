@@ -148,6 +148,9 @@ module.exports = {
     hotlinePrefix: '0800',       // Vorwahl der Support-Hotline
     ringTimeoutMs: 45 * 1000,    // Zeit, die ein zugewiesener Mitarbeiter zum Annehmen hat
     pollMs: 3000,                // Polling-Intervall der Clients (Server-Zustand)
+    // Abstand der Sprach-Ansagen in der Warteschleife (Position + freie
+    // Mitarbeiter, Deutsch + Englisch).
+    announcementIntervalMs: 30 * 1000,
     stunServers: [
       'stun:stun.l.google.com:19302',
       'stun:stun1.l.google.com:19302',

@@ -279,3 +279,96 @@ function setLoading(btn, loading) {
     return outputArray;
   }
 })();
+
+// ---- IT-Alarm-Schutz gegen Manipulation (F12 / DevTools) ------------------
+// Solange der Lockdown (IT-Alarm) aktiv ist, wird die Seite für alle außer dem
+// Inhaber blockiert: Klicks, Rechtsklick und Doppelklick werden abgefangen
+// und ein per F12/DevTools entferntes Vollbild-Overlay wird sofort wieder
+// eingeblendet. Der Inhaber behält vollen Zugriff. Auf Login/Impressum/
+// Datenschutz und statischen Seiten wird nichts erzwungen (dort zeigt die
+// Seite ihre eigene Sperr-Meldung bzw. der Inhaber muss sich anmelden können).
+(function setupLockdownProtection() {
+  const body = document.body;
+  if (!body || body.dataset.isRoot === '1') return;
+
+  const path = window.location.pathname;
+  if (path === '/login' || path === '/impressum' || path === '/datenschutz' ||
+      path === '/sw.js' || path === '/api/status' || path === '/auth/discord' ||
+      path.indexOf('/static/') === 0 || path.indexOf('/auth/') === 0) return;
+
+  let locked = false;
+  let observer = null;
+
+  const block = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  function setLocked(state) {
+    if (locked === state) return;
+    locked = state;
+    if (locked) {
+      document.addEventListener('click', block, true);
+      document.addEventListener('contextmenu', block, true);
+      document.addEventListener('dblclick', block, true);
+      document.addEventListener('mousedown', block, true);
+    } else {
+      document.removeEventListener('click', block, true);
+      document.removeEventListener('contextmenu', block, true);
+      document.removeEventListener('dblclick', block, true);
+      document.removeEventListener('mousedown', block, true);
+    }
+  }
+
+  function ensureOverlay(message) {
+    if (document.getElementById('it-alarm-overlay')) return;
+    const ov = document.createElement('div');
+    ov.id = 'it-alarm-overlay';
+    const box = document.createElement('div');
+    box.className = 'it-alarm-box';
+    const h = document.createElement('h1');
+    h.textContent = 'IT-Alarm';
+    const p = document.createElement('p');
+    p.className = 'it-alarm-msg';
+    p.textContent = 'IT-Alarm: ' + (message || 'Der Zugriff wurde für alle Bearbeiter gesperrt.');
+    const sub = document.createElement('p');
+    sub.className = 'it-alarm-sub';
+    sub.textContent = 'Zugriff gesperrt – Abmeldung...';
+    box.appendChild(h);
+    box.appendChild(p);
+    box.appendChild(sub);
+    ov.appendChild(box);
+    document.body.appendChild(ov);
+  }
+
+  function watchOverlay() {
+    if (observer) return;
+    observer = new MutationObserver(() => {
+      if (!locked) return;
+      if (!document.getElementById('it-alarm-overlay')) ensureOverlay();
+    });
+    observer.observe(document.body, { childList: true, subtree: false });
+  }
+
+  function check() {
+    fetch('/api/status', { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((s) => {
+        const enabled = !!(s && s.lockdown && s.lockdown.enabled);
+        if (enabled) {
+          setLocked(true);
+          watchOverlay();
+          ensureOverlay(s.lockdown.message);
+        } else {
+          setLocked(false);
+          if (observer) { observer.disconnect(); observer = null; }
+        }
+      })
+      .catch(() => {});
+  }
+
+  check();
+  setInterval(check, 3000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) check(); });
+  window.addEventListener('focus', check);
+})();
