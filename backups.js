@@ -81,6 +81,85 @@ function clearAllBackups() {
   db.prepare('DELETE FROM backups').run();
 }
 
+// BLOB-Werte aus dem Dump zurueck in Binärdaten wandeln
+// ({ $blob: "<base64>" } -> Buffer).
+function decodeValue(v) {
+  if (v && typeof v === 'object' && typeof v.$blob === 'string') {
+    return Buffer.from(v.$blob, 'base64');
+  }
+  return v;
+}
+
+function trySetForeignKeys(on) {
+  try {
+    db.exec(on ? 'PRAGMA foreign_keys = ON' : 'PRAGMA foreign_keys = OFF');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Ein Backup wieder einspielen: Alle Tabellen werden geleert und mit den
+// gespeicherten Daten neu befuellt (Backup-Tabelle selbst bleibt unberührt).
+// Liefert { ok, restored: { tabelle: anzahl }, error? }.
+function restoreBackup(id) {
+  const backup = getBackup(id);
+  if (!backup) return { ok: false, reason: 'notfound' };
+  let data;
+  try {
+    data = JSON.parse(backup.data);
+  } catch (e) {
+    return { ok: false, reason: 'corrupt', error: 'Backup-Datei ist beschädigt (kein gültiges JSON).' };
+  }
+  if (!data || typeof data !== 'object') {
+    return { ok: false, reason: 'corrupt', error: 'Backup-Datei ist beschädigt (leerer Inhalt).' };
+  }
+
+  const tables = Object.keys(data).filter((t) =>
+    !t.startsWith('sqlite_') && t !== 'backups' && Array.isArray(data[t]));
+
+  // Fremdschlüssel während des Wiederherstellens deaktivieren, damit die
+  // Zeilen unabhängig von der alphabetischen Reihenfolge eingespielt werden
+  // können. Beim Turso/liblsql wird die PRAGMA ignoriert -> kein Problem.
+  trySetForeignKeys(false);
+  const result = { ok: true, restored: {} };
+  try {
+    db.exec('BEGIN');
+    try {
+      for (const t of tables) db.exec(`DELETE FROM "${t}"`);
+      try { db.exec('DELETE FROM sqlite_sequence'); } catch (e) { /* nicht überall vorhanden */ }
+    } catch (e) {
+      db.exec('ROLLBACK');
+      trySetForeignKeys(true);
+      return { ok: false, reason: 'error', error: e.message };
+    }
+    try {
+      for (const t of tables) {
+        const rows = data[t];
+        if (!rows.length) { result.restored[t] = 0; continue; }
+        const cols = Object.keys(rows[0]);
+        const ins = db.prepare(
+          `INSERT INTO "${t}" (${cols.map((c) => `"${c}"`).join(', ')}) ` +
+          `VALUES (${cols.map(() => '?').join(', ')})`);
+        for (const row of rows) {
+          ins.run(...cols.map((c) => decodeValue(row[c])));
+        }
+        result.restored[t] = rows.length;
+      }
+    } catch (e) {
+      db.exec('ROLLBACK');
+      trySetForeignKeys(true);
+      return { ok: false, reason: 'error', error: e.message };
+    }
+    db.exec('COMMIT');
+  } catch (e) {
+    return { ok: false, reason: 'error', error: e.message };
+  } finally {
+    trySetForeignKeys(true);
+  }
+  return result;
+}
+
 // Monatliches automatisches Aufräumen: die neuesten `monthlyKeep` bleiben,
 // alles Ältere wird entfernt. Läuft über getSetting-Flag nur einmal pro
 // Zeitraum (aufrufender Scheduler setzt das Flag nach Erfolg).
@@ -143,6 +222,7 @@ module.exports = {
   getBackup,
   deleteBackup,
   clearAllBackups,
+  restoreBackup,
   monthlyCleanup,
   runWeeklyAutoBackupIfDue,
   runMonthlyCleanupIfDue,

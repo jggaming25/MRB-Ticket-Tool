@@ -1,0 +1,139 @@
+<%- include('partials/head', { title, user, isHR, isHRHR, currentPath }) %>
+
+  <div class="page-head">
+    <div>
+      <a class="btn btn-ghost btn-sm" href="/account/settings">← Einstellungen</a>
+      <h1 class="mt-sm">Mitarbeiter-Abfrage</h1>
+      <p class="muted">Schichtzeiten und Aktivitäten eines Mitarbeiters anhand seiner Nummer (Durchwahl) abrufen.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <form method="get" action="/account/settings/admin/employee" class="form-row">
+      <div class="form-group grow">
+        <input type="number" name="number" class="input" min="1" step="1"
+               placeholder="Durchwahl des Mitarbeiters, z. B. 2"
+               value="<%= number %>" required>
+      </div>
+      <div class="form-group">
+        <button type="submit" class="btn btn-primary">Mitarbeiter abrufen</button>
+      </div>
+    </form>
+
+    <% if (number && !target) { %>
+      <p class="muted mt-sm">Kein Mitarbeiter mit der Nummer <%= number %> gefunden.</p>
+    <% } %>
+  </div>
+
+  <% if (target) { %>
+    <div class="card">
+      <h2>
+        <%= target.global_name || target.username %>
+        <span class="tag <%= target.role === 'hrhr' ? 'role-hrhr' : 'role-hr' %>"><%= roleLabels[target.role] || target.role %></span>
+        <span class="tag">Durchwahl #<%= target.extension %></span>
+      </h2>
+      <p class="muted">@<%= target.discord_username || '–' %> · <%= target.email || 'keine E-Mail' %> ·
+        <%= target.global_name ? target.username : '–' %> · Registriert <%= fmtDate(target.created_at) %>
+        · Zuletzt eingeloggt <%= target.last_login ? fmtDate(target.last_login) : '–' %></p>
+
+      <h3 class="section-heading">Schichtzeiten (Voice-Support)</h3>
+      <% if (shifts.length === 0) { %>
+        <p class="muted">Noch keine Schichten erfasst.</p>
+      <% } else { %>
+        <table class="table">
+          <thead>
+            <tr><th>Beginn</th><th>Ende</th><th>Dauer</th></tr>
+          </thead>
+          <tbody>
+            <% shifts.forEach((s) => { %>
+              <tr>
+                <td class="muted small"><%= fmtDate(s.clocked_in_at) %></td>
+                <td class="muted small"><%= s.clocked_out_at ? fmtDate(s.clocked_out_at) : 'läuft noch' %></td>
+                <td class="small">
+                  <% if (s.clocked_out_at) {
+                    const ms = new Date(s.clocked_out_at) - new Date(s.clocked_in_at);
+                    const h = Math.floor(ms / 3600000);
+                    const m = Math.floor((ms % 3600000) / 60000);
+                  %><%= h %> h <%= m %> min<%
+                  } else { %>–<% } %>
+                </td>
+              </tr>
+            <% }) %>
+          </tbody>
+        </table>
+      <% } %>
+    </div>
+
+    <div class="card">
+      <h2>Anrufe (Support)</h2>
+      <% if (calls.length === 0) { %>
+        <p class="muted">Keine Anrufe gefunden.</p>
+      <% } else { %>
+        <table class="table">
+          <thead>
+            <tr><th>Anruf</th><th>Rolle</th><th>Anrufer</th><th>Mitarbeiter</th><th>Status</th><th>Beginn</th><th>Ende</th></tr>
+          </thead>
+          <tbody>
+            <% calls.forEach((c) => { %>
+              <tr>
+                <td class="small"><%= '#' + String(c.id).padStart(4, '0') %></td>
+                <td class="small"><%= c.caller_id === target.id ? 'Anrufer' : 'Mitarbeiter' %></td>
+                <td class="small"><%= c.caller_global || c.caller_name || '–' %></td>
+                <td class="small"><%= c.staff_global || c.staff_name || '–' %></td>
+                <td><span class="tag log-<%= c.status %>"><%= c.status %></span></td>
+                <td class="muted small"><%= fmtDate(c.joined_at) %></td>
+                <td class="muted small"><%= c.ended_at ? fmtDate(c.ended_at) : '–' %></td>
+              </tr>
+            <% }) %>
+          </tbody>
+        </table>
+      <% } %>
+    </div>
+
+    <div class="card">
+      <h2>Tickets</h2>
+      <% if (tickets.length === 0) { %>
+        <p class="muted">Keine Tickets gefunden.</p>
+      <% } else { %>
+        <table class="table">
+          <thead>
+            <tr><th>Nr.</th><th>Betreff</th><th>Status</th><th>Zuletzt geändert</th></tr>
+          </thead>
+          <tbody>
+            <% tickets.forEach((t) => { %>
+              <tr class="clickable" data-ticket-id="<%= t.id %>" data-ticket-url="/admin">
+                <td class="small">#<%= String(t.number).padStart(4, '0') %></td>
+                <td class="small"><%= t.subject %></td>
+                <td><span class="tag log-<%= t.status %>"><%= statusLabel(t.status) %></span></td>
+                <td class="muted small"><%= fmtDate(t.updated_at) %></td>
+              </tr>
+            <% }) %>
+          </tbody>
+        </table>
+      <% } %>
+    </div>
+
+    <div class="card">
+      <h2>Konto-Verlauf (Audit-Log)</h2>
+      <% if (logs.length === 0) { %>
+        <p class="muted">Noch keine Aktionen protokolliert.</p>
+      <% } else { %>
+        <table class="table">
+          <thead>
+            <tr><th>Zeit</th><th>Aktion</th><th>Details</th></tr>
+          </thead>
+          <tbody>
+            <% logs.forEach((l) => { %>
+              <tr>
+                <td class="muted small"><%= fmtDate(l.created_at) %></td>
+                <td><span class="tag log-<%= l.action || 'unbekannt' %>"><%= logActionLabel(l.action, l.reason) %></span></td>
+                <td class="small"><%= l.reason || '–' %></td>
+              </tr>
+            <% }) %>
+          </tbody>
+        </table>
+      <% } %>
+    </div>
+  <% } %>
+
+<%- include('partials/footer') %>

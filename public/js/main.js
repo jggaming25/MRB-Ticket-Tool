@@ -187,12 +187,14 @@ function setLoading(btn, loading) {
   }
 
   async function enablePush() {
-    const reg = await navigator.serviceWorker.register('/sw.js');
-    await navigator.serviceWorker.ready;
+    let reg;
     try {
+      reg = await navigator.serviceWorker.register('/sw.js');
+      await navigator.serviceWorker.ready;
       await subscribePush(reg);
     } catch (err) {
-      // z. B. Push nicht konfiguriert – auf Polling ausweichen
+      // z. B. Push nicht konfiguriert, HTTP statt HTTPS oder SW blockiert –
+      // auf Polling ausweichen, damit die Benachrichtigungen trotzdem kommen.
       console.warn('Push-Abo fehlgeschlagen, nutze Polling:', err);
       startPolling();
       return;
@@ -228,7 +230,9 @@ function setLoading(btn, loading) {
     let lastUpdate = localStorage.getItem(storageKey) || new Date().toISOString();
 
     async function poll() {
-      if (document.hidden) return;
+      // Wichtig fuer Windows: NICHT bei verstecktem Tab abbrechen, sonst
+      // kommen keine Benachrichtigungen, solange die Seite im Hintergrund
+      // liegt. Das Polling laeuft bewusst auch im Hintergrund weiter.
       let res;
       try {
         res = await fetch(`/api/tickets/updates?since=${encodeURIComponent(lastUpdate)}`);
@@ -252,6 +256,7 @@ function setLoading(btn, loading) {
           ? `${single.subject} u.a. – Klick zum Öffnen`
           : `${single.subject}`,
         icon: '/static/logo.png',
+        tag: 'ticket-updates',
       });
       notification.onclick = () => {
         window.focus();

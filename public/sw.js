@@ -22,16 +22,13 @@ self.addEventListener('push', (event) => {
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   const data = event.notification.data || {};
-  // "accept"-Action: zur Support-Mitarbeiter-Konsole (Anruf annehmen).
-  const url = event.action === 'accept'
-    ? (data.action === 'accept' ? (data.url || '/support/staff') : '/support/staff')
-    : (data.url || '/');
+  const url = data.url || '/';
   event.waitUntil((async () => {
     const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     for (const client of all) {
       if ('focus' in client) {
-        client.focus();
-        client.navigate(url);
+        await client.focus();
+        try { await client.navigate(url); } catch (e) { /* gleiche URL o. ä. */ }
         return;
       }
     }

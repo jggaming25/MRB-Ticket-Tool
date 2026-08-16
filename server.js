@@ -769,8 +769,15 @@ app.post('/account/settings/admin/alarm', requireRoot, (req, res) => {
 app.post('/account/settings/admin/support', requireRoot, (req, res) => {
   const s = (v) => { const n = Number(v); return Number.isFinite(n) ? String(Math.round(n)) : ''; };
   const days = Array.isArray(req.body.supportHoursDays)
-    ? req.body.supportHoursDays.map(Number)
+    ? req.body.supportHoursDays.map(Number).filter((d) => Number.isInteger(d) && d >= 1 && d <= 7)
     : [];
+  const schedule = {};
+  for (const d of days) {
+    schedule[String(d)] = {
+      start: String(req.body['supportHoursStart_' + d] || '').trim(),
+      end: String(req.body['supportHoursEnd_' + d] || '').trim(),
+    };
+  }
   const result = support.saveSettings({
     // UI-Eingabe in Sekunden, Speicherung intern in Millisekunden
     ringTimeoutMs: s(req.body.ringTimeoutMs) !== '' ? String(Number(s(req.body.ringTimeoutMs)) * 1000) : '',
@@ -781,9 +788,7 @@ app.post('/account/settings/admin/support', requireRoot, (req, res) => {
     minutesPerCall: s(req.body.minutesPerCall),
     queueAlertThreshold: s(req.body.queueAlertThreshold),
     supportHoursEnabled: req.body.supportHoursEnabled,
-    supportHoursDays: days,
-    supportHoursStart: req.body.supportHoursStart,
-    supportHoursEnd: req.body.supportHoursEnd,
+    supportHoursSchedule: schedule,
     stunServers: req.body.stunServers ? String(req.body.stunServers).split(',').map((s) => s.trim()) : [],
   });
   if (result.errors.length) {
@@ -957,6 +962,89 @@ app.get('/account/settings/admin/backups/:id/download', requireRoot, (req, res) 
   res.send(b.data);
 });
 
+// Backup wiederherstellen: Alle Daten werden durch den Backup-Stand ersetzt.
+// Erfordert ein Bestätigungshäkchen (force=1) in der UI (data-force-confirm).
+app.post('/account/settings/admin/backups/:id/restore', requireRoot, (req, res) => {
+  if (req.body.force !== '1') {
+    flash(req, 'error', 'Wiederherstellung abgebrochen – bitte die Bestätigung im Dialog bestätigen.');
+    return res.redirect('/account/settings');
+  }
+  const b = backups.getBackup(req.params.id);
+  if (!b) {
+    flash(req, 'error', 'Dieses Backup existiert nicht.');
+    return res.redirect('/account/settings');
+  }
+  const result = backups.restoreBackup(b.id);
+  if (!result.ok) {
+    logAccountAction(req.user.id, req.user.id, 'backup_restore_failed',
+      `Wiederherstellung des Backups #${b.id} fehlgeschlagen: ${result.error || result.reason}`);
+    flash(req, 'error', `Wiederherstellung fehlgeschlagen: ${result.error || result.reason || 'unbekannter Fehler'}`);
+    return res.redirect('/account/settings');
+  }
+  const total = Object.values(result.restored || {}).reduce((a, n) => a + (Number(n) || 0), 0);
+  logAccountAction(req.user.id, req.user.id, 'backup_restore',
+    `Backup #${b.id} wiederhergestellt (${total} Datensätze).`);
+  const who = req.user.global_name || req.user.username;
+  notifyChangesWhatsApp(`♻️ Backup #${b.id} von ${who} wiederhergestellt (${total} Datensätze).`);
+  flash(req, 'success',
+    `Backup #${b.id} wiederhergestellt – alle Daten wurden auf den Backup-Stand zurückgesetzt (${total} Datensätze).`);
+  res.redirect('/account/settings');
+});
+
+// Mitarbeiter-Abfrage (Einstellungen): Nach Durchwahl/Nummer die Schichtzeiten
+// (support_shifts) und alle Aktivitäten des Mitarbeiters abrufen (Konto-Logs,
+// Tickets, Anrufe). Nur für den Inhaber.
+app.get('/account/settings/admin/employee', requireRoot, (req, res) => {
+  const number = String(req.query.number || '').trim();
+  let target = null;
+  let shifts = [];
+  let logs = [];
+  let calls = [];
+  let tickets = [];
+  if (number) {
+    const num = Number(number);
+    if (Number.isInteger(num) && num > 0) {
+      target = db.prepare(
+        "SELECT * FROM users WHERE extension = ? AND role IN ('hr','hrhr')"
+      ).get(num);
+    }
+    if (target) {
+      shifts = db.prepare(`
+        SELECT * FROM support_shifts WHERE user_id = ? ORDER BY id DESC
+      `).all(target.id);
+      logs = normalizeLogRows(db.prepare(`
+        SELECT l.*, ar.username AS actor_name, ar.global_name AS actor_global
+        FROM account_logs l
+        LEFT JOIN users ar ON ar.id = l.actor_id
+        WHERE l.account_id = ?
+        ORDER BY l.id DESC LIMIT 300
+      `).all(target.id));
+      calls = db.prepare(`
+        SELECT c.*, cu.username AS caller_name, cu.global_name AS caller_global,
+               su.username AS staff_name, su.global_name AS staff_global
+        FROM support_calls c
+        LEFT JOIN users cu ON cu.id = c.caller_id
+        LEFT JOIN users su ON su.id = c.staff_id
+        WHERE c.staff_id = ? OR c.caller_id = ?
+        ORDER BY c.id DESC LIMIT 300
+      `).all(target.id, target.id);
+      tickets = db.prepare(`
+        SELECT * FROM tickets WHERE user_id = ? OR assigned_to = ? OR claimed_by = ?
+        ORDER BY id DESC LIMIT 300
+      `).all(target.id, target.id, target.id);
+    }
+  }
+  res.render('admin-employee', {
+    title: 'Mitarbeiter-Abfrage',
+    number,
+    target,
+    shifts,
+    logs,
+    calls,
+    tickets,
+  });
+});
+
 // ---- Benachrichtigungen: Änderungen an sichtbaren Tickets seit Zeitpunkt ----
 // Liefert Ticket-Änderungen, die der eingeloggte Nutzer sehen darf (Nutzer:
 // eigene Tickets; Team/Inhaber: alle Tickets). Der Client pollt diesen
@@ -1009,6 +1097,12 @@ const supportApiLimiter = rateLimit({
 
 app.get('/support', requireLogin, (req, res) => {
   const s = support.getSettings();
+  const openNow = support.isSupportOpen();
+  if (!openNow.open) {
+    const closedLabel = openNow.closedLabel || 'Derzeit geschlossen';
+    return renderError(res, 503, 'Derzeit geschlossen',
+      `${closedLabel}. Erreichbarkeit: ${support.supportHoursLabel()}`);
+  }
   res.render('support', { title: 'Voice-Support', staff: false, pollMs: s.pollMs, stunServers: s.stunServers });
 });
 

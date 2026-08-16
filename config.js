@@ -164,12 +164,17 @@ module.exports = {
     minutesPerCall: 3,
     // Ab dieser Anzahl wartender Anrufer wird per WhatsApp ein Hinweis gesendet.
     queueAlertThreshold: 2,
-    // Erreichbarkeitszeiten (Europe/Berlin). days: 1=Montag … 7=Sonntag.
+    // Erreichbarkeitszeiten (Europe/Berlin), pro Wochentag (1=Mo … 7=So).
+    // Nur aufgeführte Tage mit gültiger Uhrzeit (HH:MM) gelten als geöffnet.
     supportHours: {
       enabled: false,
-      days: [1, 2, 3, 4, 5],
-      start: '09:00',
-      end: '18:00',
+      schedule: {
+        1: { start: '09:00', end: '18:00' },
+        2: { start: '09:00', end: '18:00' },
+        3: { start: '09:00', end: '18:00' },
+        4: { start: '09:00', end: '18:00' },
+        5: { start: '09:00', end: '18:00' },
+      },
     },
   },
 

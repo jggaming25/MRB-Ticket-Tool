@@ -150,13 +150,16 @@
           </div>
         </div>
         <%
-          const hourDays = adminData.support.supportHours && adminData.support.supportHours.days
-            ? adminData.support.supportHours.days
-            : [];
-          const hourStart = adminData.support.supportHours ? adminData.support.supportHours.start : '09:00';
-          const hourEnd = adminData.support.supportHours ? adminData.support.supportHours.end : '18:00';
+          const hourSchedule = adminData.support.supportHours && adminData.support.supportHours.schedule
+            ? adminData.support.supportHours.schedule
+            : {};
           const hourEnabled = adminData.support.supportHours ? adminData.support.supportHours.enabled : false;
           const dayNames = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
+          const hourDays = [];
+          for (let d = 1; d <= 7; d++) {
+            const slot = hourSchedule[String(d)];
+            if (slot && slot.start && slot.end) hourDays.push(d);
+          }
         %>
         <div class="form-group" style="margin-top:4px;">
           <label class="small">Support-Zeiten festlegen (deaktiviert = immer erreichbar)</label>
@@ -164,21 +167,32 @@
             <input type="checkbox" name="supportHoursEnabled" value="1" <%= hourEnabled ? 'checked' : '' %>>
             Nur zu festen Zeiten erreichbar
           </label>
-          <div class="support-days">
-            <% dayNames.forEach((dn, i) => { %>
-              <label class="check-line"><input type="checkbox" name="supportHoursDays" value="<%= i + 1 %>" <%= hourDays.includes(i + 1) ? 'checked' : '' %>> <%= dn %></label>
-            <% }) %>
-          </div>
-          <div class="form-row">
-            <div class="form-group">
-              <label class="small">Von (HH:MM, Europe/Berlin)</label>
-              <input type="time" name="supportHoursStart" class="input" value="<%= hourStart %>">
-            </div>
-            <div class="form-group">
-              <label class="small">Bis (HH:MM)</label>
-              <input type="time" name="supportHoursEnd" class="input" value="<%= hourEnd %>">
-            </div>
-          </div>
+          <table class="table table-compact support-hours-table">
+            <thead>
+              <tr><th></th><th>Tag</th><th>Von (HH:MM, Europe/Berlin)</th><th>Bis (HH:MM)</th></tr>
+            </thead>
+            <tbody>
+              <% dayNames.forEach((dn, i) => {
+                const d = i + 1;
+                const slot = hourSchedule[String(d)] || {};
+                const active = hourDays.includes(d);
+              %>
+                <tr>
+                  <td class="small" style="width:32px;">
+                    <input type="checkbox" name="supportHoursDays" value="<%= d %>" <%= active ? 'checked' : '' %>>
+                  </td>
+                  <td class="small"><%= dn %></td>
+                  <td class="small" style="min-width:130px;">
+                    <input type="time" name="supportHoursStart_<%= d %>" class="input" value="<%= slot.start || '09:00' %>">
+                  </td>
+                  <td class="small" style="min-width:130px;">
+                    <input type="time" name="supportHoursEnd_<%= d %>" class="input" value="<%= slot.end || '18:00' %>">
+                  </td>
+                </tr>
+              <% }) %>
+            </tbody>
+          </table>
+          <p class="hint small">Nur angehakte Tage mit gültiger Uhrzeit gelten als erreichbar. Außerhalb der Zeiten können keine Anrufe gestartet werden.</p>
         </div>
         <button type="submit" class="btn btn-primary">Voice-Support-Einstellungen speichern</button>
       </form>
@@ -260,6 +274,23 @@
 
       <hr class="admin-sep">
 
+      <h3>Mitarbeiter-Abfrage</h3>
+      <p class="hint">
+        Schichtzeiten und Aktivitäten eines Mitarbeiters anhand seiner Nummer (Durchwahl) abrufen –
+        wann er eingestempelt war, seine Anrufe, Tickets und der Konto-Verlauf.
+      </p>
+      <form method="get" action="/account/settings/admin/employee" class="form-row">
+        <div class="form-group grow">
+          <input type="number" name="number" class="input" min="1" step="1"
+                 placeholder="Durchwahl des Mitarbeiters, z. B. 2" required>
+        </div>
+        <div class="form-group">
+          <button type="submit" class="btn btn-primary">Mitarbeiter abrufen</button>
+        </div>
+      </form>
+
+      <hr class="admin-sep">
+
       <h3>System-Neustart</h3>
       <p class="hint">Startet den Server komplett neu (ca. 1–2 Minuten Ausfallzeit). Tickets und Daten bleiben erhalten.</p>
       <form method="post" action="/account/settings/admin/restart" class="inline-form">
@@ -292,9 +323,14 @@
                 <td class="small"><%= b.size > 1048576 ? (b.size / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(b.size / 1024)) + ' KB' %></td>
                 <td class="small" style="white-space:nowrap;">
                   <a class="btn btn-sm btn-ghost" href="/account/settings/admin/backups/<%= b.id %>/download">Download</a>
+                  <form method="post" action="/account/settings/admin/backups/<%= b.id %>/restore" class="inline-form"
+                        data-force-confirm="Dieses Backup wirklich wiederherstellen? ALLE aktuellen Daten (Tickets, Nutzer, Nachrichten, Anrufe, Einstellungen, ...) werden durch den Stand dieses Backups ersetzt. Dies kann nicht rückgängig gemacht werden.">
+                    <input type="hidden" name="force" value="0">
+                    <button type="submit" class="btn btn-sm btn-danger">Wiederherstellen</button>
+                  </form>
                   <form method="post" action="/account/settings/admin/backups/<%= b.id %>/delete" class="inline-form"
                         data-confirm="Dieses Backup wirklich löschen?">
-                    <button type="submit" class="btn btn-sm btn-danger">Löschen</button>
+                    <button type="submit" class="btn btn-sm btn-ghost">Löschen</button>
                   </form>
                 </td>
               </tr>

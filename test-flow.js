@@ -672,9 +672,10 @@ function findMail(subjectPart) {
   r = await postJson('/api/push/unsubscribe', { endpoint: 'https://push.example/x' }, userCookie);
   ok('Push: Unsubscribe ok', r.status === 200 && r.body.includes('ok'));
 
-  // Discord-Rollen steuern den Zugriff auf "Interne Links"
-  // Nav ist fuer normale Nutzer auf "Home" reduziert -> kein "Interne Links"-Menue,
-  // aber die Tool-Kacheln auf der Home-Seite bleiben bei passender Discord-Rolle sichtbar.
+  // Discord-Rollen steuern den Zugriff auf "Interne Links".
+  // Die "Interne Bereiche"-Sektion wurde von der Startseite ENTFERNT – interne
+  // Links sind nur noch ueber das "Interne Links"-Menue erreichbar (bei
+  // passender Discord-Rolle).
   r = await get('/', userCookie);
   ok('Nutzer: keine internen Links im Menue', !r.body.includes('Interne Links'));
   const allowedRole = config.staffDiscordRoleIds && config.staffDiscordRoleIds[0];
@@ -682,7 +683,8 @@ function findMail(subjectPart) {
   if (allowedRole && firstStaffLabel) {
     db.prepare('UPDATE users SET discord_roles = ? WHERE id = ?').run(allowedRole, normalUser.id);
     r = await get('/', userCookie);
-    ok('Nutzer mit Discord-Rolle: interne Link-Kachel sichtbar (kein Menue)', r.body.includes(firstStaffLabel) && !r.body.includes('Interne Links'));
+    ok('Nutzer mit Discord-Rolle: keine internen Links/Kacheln auf der Homepage',
+      !r.body.includes('Interne Links') && !r.body.includes(firstStaffLabel));
   }
 
   // Ohne Login: Einstellungen nicht erreichbar
@@ -761,6 +763,22 @@ function findMail(subjectPart) {
   r = await post('/account/settings/admin/backups/clear', {}, hrhrCookie);
   ok('Backup: alle Backups loeschen (jlg09)', r.status === 302);
   ok('Backup: nach clear alle weg', db.prepare('SELECT COUNT(*) AS c FROM backups').get().c === 0);
+
+  // Backups: Wiederherstellung (Restore) ersetzt die aktuellen Daten.
+  r = await post('/account/settings/admin/backups/create', {}, hrhrCookie);
+  ok('Restore: Backup fuer Wiederherstellung angelegt', r.status === 302);
+  const restoreRow = db.prepare('SELECT * FROM backups ORDER BY id DESC LIMIT 1').get();
+  const subjectBefore = db.prepare('SELECT subject FROM tickets WHERE id = 1').get().subject;
+  db.prepare('UPDATE tickets SET subject = ? WHERE id = 1').run('NACH-DEM-BACKUP-GEAENDERT');
+  ok('Restore: ohne Bestaetigung abgebrochen, Daten bleiben geaendert',
+    (await post(`/account/settings/admin/backups/${restoreRow.id}/restore`, {}, hrhrCookie)).status === 302
+    && db.prepare('SELECT subject FROM tickets WHERE id = 1').get().subject === 'NACH-DEM-BACKUP-GEAENDERT');
+  r = await post(`/account/settings/admin/backups/${restoreRow.id}/restore`, { force: '1' }, hrhrCookie);
+  ok('Restore: Daten auf Backup-Stand zurueckgesetzt', r.status === 302
+    && db.prepare('SELECT subject FROM tickets WHERE id = 1').get().subject === subjectBefore);
+  ok('Restore: Nutzer bleiben erhalten', db.prepare('SELECT COUNT(*) AS c FROM users').get().c >= 4);
+  r = await post(`/account/settings/admin/backups/${restoreRow.id}/delete`, {}, hrhrCookie);
+  ok('Restore: Test-Backup wieder entfernt', r.status === 302);
 
   // Session-Lebensdauer: Discord-Login-Cookie laeuft in 14 Tagen ab
   const freshAuth = await get('/auth/discord');
@@ -853,6 +871,12 @@ function findMail(subjectPart) {
   st = JSON.parse(r.body);
   ok('Support: Anruf-Zustand liefert Position + freie Mitarbeiter', st.ok === true && typeof st.call.queuePosition === 'number' && typeof st.call.availableStaff === 'number');
 
+  // Wartezeit-Eskalation: Der zweite Anrufer wartet seit 5 Minuten, es ist
+  // nur EIN Supporter eingestempelt -> +1 Minute pro weiterer Warteminute.
+  ok('Support: Wartezeit-Eskalation aktiv (1 Supporter, >3 Min gewartet)',
+    st.call.queueWaitEscalating === true && st.call.queueWaitMinutes === 5,
+    `queueWaitMinutes=${st.call.queueWaitMinutes}`);
+
   // Weiterleitung: aktiven Anruf an den naechsten freien Mitarbeiter weitergeben.
   r = await postJson('/api/support/call/' + callId + '/transfer', {}, hrCookie);
   const tr = JSON.parse(r.body);
@@ -895,6 +919,37 @@ function findMail(subjectPart) {
 
   r = await get('/account/settings', hrhrCookie);
   ok('Support: Admin-UI zeigt Wartezeit-Faktor, Alarm-Schwellwert + Support-Zeiten', r.status === 200 && r.body.includes('name="minutesPerCall"') && r.body.includes('name="queueAlertThreshold"') && r.body.includes('name="supportHoursEnabled"') && r.body.includes('name="supportHoursDays"'));
+
+  // Support-Zeiten pro Tag: Heute (nicht konfigurierter Tag) ist geschlossen,
+  // Anruf wird abgelehnt; ohne Zeiten ist man immer erreichbar.
+  const nowBerlin = new Date(new Date().toLocaleString('en-US', { timeZone: 'Europe/Berlin' }));
+  const dayToday = nowBerlin.getDay() === 0 ? 7 : nowBerlin.getDay();
+  const otherDay = dayToday === 7 ? 1 : dayToday + 1;
+  support.saveSettings({
+    supportHoursEnabled: '1',
+    supportHoursSchedule: { [String(otherDay)]: { start: '00:00', end: '23:59' } },
+  });
+  const openCheck = support.isSupportOpen();
+  ok('Support: heute nicht konfiguriert -> geschlossen', openCheck.open === false && !!openCheck.closedLabel);
+  const closedStart = support.startCall(db.prepare("SELECT id FROM users WHERE discord_username = 'lisa_wasmacht'").get().id);
+  ok('Support: Anruf bei geschlossenem Support abgelehnt', closedStart.ok === false && closedStart.reason === 'closed');
+  const allDays = {};
+  for (let d = 1; d <= 7; d++) allDays[String(d)] = { start: '09:00', end: '18:00' };
+  support.saveSettings({ supportHoursEnabled: '0', supportHoursSchedule: allDays });
+  ok('Support: Zeiten deaktiviert -> wieder erreichbar', support.isSupportOpen().open === true);
+
+  // Mitarbeiter-Abfrage: Schichtzeiten + Aktivitaeten per Durchwahl abrufen.
+  r = await get('/account/settings/admin/employee', hrhrCookie);
+  ok('Abfrage: Mitarbeiter-Formular erreichbar', r.status === 200 && r.body.includes('Mitarbeiter-Abfrage'));
+  const extHr = db.prepare('SELECT extension FROM users WHERE id = ?').get(hrUser.id).extension;
+  r = await get(`/account/settings/admin/employee?number=${extHr}`, hrhrCookie);
+  ok('Abfrage: Schichtzeiten des Mitarbeiters sichtbar', r.status === 200
+    && r.body.includes('Schichtzeiten') && r.body.includes((hrUser.global_name || hrUser.username)));
+  r = await get('/account/settings/admin/employee?number=999999', hrhrCookie);
+  ok('Abfrage: unbekannte Nummer zeigt Hinweis', r.status === 200 && r.body.includes('Kein Mitarbeiter'));
+
+  // Support-Zeiten pro Tag: Heute (nicht konfigurierter Tag) ist geschlossen,
+  // Anruf wird abgelehnt; ohne Zeiten ist man immer erreichbar.
 
   // Warteschleifenmusik: Song hinzufügen, listen, laden und löschen
   const songId = support.addHoldMusic({ name: 'test-song.mp3', mime: 'audio/mpeg', size: 4, data: Buffer.from([0x1, 0x2, 0x3, 0x4]), userId: 1 });

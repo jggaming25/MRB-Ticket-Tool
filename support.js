@@ -70,44 +70,85 @@ function getSettings() {
   }
 }
 
-// Support-Zeiten normalisieren: { enabled, days:[1-7], start:'HH:MM', end:'HH:MM' }
+const timeOk = (t) => typeof t === 'string' && /^\d{2}:\d{2}$/.test(t);
+
+// Support-Zeiten normalisieren: { enabled, schedule: { "1": {start,end}, … } }
+// mit pro Tag getrennten Zeiten. Akzeptiert auch das alte Format
+// ({ enabled, days:[1-7], start, end }) und wandelt es um.
+function buildLegacySchedule(h) {
+  const days = Array.isArray(h.days)
+    ? h.days.map(Number).filter((d) => Number.isInteger(d) && d >= 1 && d <= 7)
+    : [];
+  const start = timeOk(h.start) ? h.start : '09:00';
+  const end = timeOk(h.end) ? h.end : '18:00';
+  const schedule = {};
+  for (const d of days) schedule[String(d)] = { start, end };
+  return schedule;
+}
+
 function normalizeSupportHours(input, fallback) {
   const f = fallback || config.support.supportHours || {};
-  if (!input || typeof input !== 'object') return { ...f };
-  const days = Array.isArray(input.days)
-    ? input.days.map(Number).filter((d) => Number.isInteger(d) && d >= 1 && d <= 7)
-    : (Array.isArray(f.days) ? f.days : []);
-  const timeOk = (t) => typeof t === 'string' && /^\d{2}:\d{2}$/.test(t);
+  const buildFrom = (src) => {
+    if (!src || typeof src !== 'object') return {};
+    const schedule = {};
+    if (src.schedule && typeof src.schedule === 'object') {
+      for (const key of Object.keys(src.schedule)) {
+        const slot = src.schedule[key];
+        const d = Number(key);
+        if (Number.isInteger(d) && d >= 1 && d <= 7 && slot && typeof slot === 'object'
+          && timeOk(slot.start) && timeOk(slot.end)) {
+          schedule[String(d)] = { start: slot.start, end: slot.end };
+        }
+      }
+    }
+    if (!Object.keys(schedule).length) {
+      Object.assign(schedule, buildLegacySchedule(src));
+    }
+    return schedule;
+  };
+
+  let schedule = {};
+  let hasSchedule = false;
+  if (input && typeof input === 'object') {
+    if (input.schedule && typeof input.schedule === 'object') {
+      schedule = buildFrom(input);
+      hasSchedule = true;
+    }
+    if (!hasSchedule && Array.isArray(input.days)) {
+      schedule = buildFrom(input);
+      hasSchedule = true;
+    }
+  }
+  if (!hasSchedule) schedule = buildFrom(f);
   return {
-    enabled: !!input.enabled,
-    days: days.length ? days : (Array.isArray(f.days) ? f.days : []),
-    start: timeOk(input.start) ? input.start : (timeOk(f.start) ? f.start : '09:00'),
-    end: timeOk(input.end) ? input.end : (timeOk(f.end) ? f.end : '18:00'),
+    enabled: !!(input && input.enabled),
+    schedule,
   };
 }
 
 // Ist der Support gerade (in Europe/Berlin) erreichbar?
 function isSupportOpen(now) {
   const h = getSettings().supportHours;
-  if (!h || !h.enabled || !h.days || !h.days.length) return { open: true };
+  if (!h || !h.enabled || !h.schedule || !Object.keys(h.schedule).length) return { open: true };
   const t = berlinTime(now || new Date());
   const day = t.getDay() === 0 ? 7 : t.getDay(); // 1=Mo … 7=So
-  if (!h.days.includes(day)) return { open: false, closedLabel: 'Heute geschlossen' };
-  const [sh, sm] = h.start.split(':').map(Number);
-  const [eh, em] = h.end.split(':').map(Number);
+  const slot = h.schedule[String(day)];
+  if (!slot) return { open: false, closedLabel: 'Heute geschlossen' };
+  const [sh, sm] = slot.start.split(':').map(Number);
+  const [eh, em] = slot.end.split(':').map(Number);
   const nowMin = t.getHours() * 60 + t.getMinutes();
   const startMin = sh * 60 + sm;
   const endMin = eh * 60 + em;
   return { open: nowMin >= startMin && nowMin < endMin };
 }
 
-// Text der Support-Zeiten, z. B. "Mo–Fr 09:00–18:00" oder "Immer erreichbar".
+// Text der Support-Zeiten, z. B. "Mo 09:00–18:00, Di 09:00–18:00" oder
+// "Immer erreichbar".
 function supportHoursLabel() {
   const h = getSettings().supportHours;
-  if (!h || !h.enabled || !h.days || !h.days.length) return 'Jederzeit erreichbar';
-  const order = [1, 2, 3, 4, 5, 6, 7].filter((d) => h.days.includes(d));
-  const dayStr = order.map((d) => WEEKDAY_LABELS[d]).join(' ');
-  return `${dayStr} ${h.start}–${h.end} Uhr`;
+  if (!h || !h.enabled || !h.schedule || !Object.keys(h.schedule).length) return 'Jederzeit erreichbar';
+  const order = [1, 2, 3, 4, 5, 6, 7].filter((d) => h.schedule[String(d)]);
+  return order.map((d) => `${WEEKDAY_LABELS[d]} ${h.schedule[String(d)].start}–${h.schedule[String(d)].end} Uhr`).join(', ');
 }
 
 // "Support-Nummer" – wird einmalig aus den vorhandenen Datenwerten abgeleitet
@@ -161,12 +202,18 @@ function saveSettings(input) {
   }
   const supportHours = normalizeSupportHours({
     enabled: input.supportHoursEnabled === true || input.supportHoursEnabled === '1' || input.supportHoursEnabled === 'on',
+    schedule: input.supportHoursSchedule && typeof input.supportHoursSchedule === 'object'
+      ? input.supportHoursSchedule
+      : undefined,
     days: Array.isArray(input.supportHoursDays)
       ? input.supportHoursDays.map(Number)
-      : [],
+      : undefined,
     start: number(input.supportHoursStart),
     end: number(input.supportHoursEnd),
   }, d.supportHours);
+  if (supportHours.enabled && !Object.keys(supportHours.schedule).length) {
+    errors.push('Mindestens einen Tag mit gültiger Uhrzeit (HH:MM) auswählen.');
+  }
 
   const payload = {
     ringTimeoutMs,
@@ -392,6 +439,8 @@ function assignWaitingCalls({ excludeStaffId } = {}) {
 function startCall(userId) {
   const existing = activeCallOf(userId);
   if (existing) return { ok: true, call: getCall(existing.id) };
+  const openNow = isSupportOpen();
+  if (!openNow.open) return { ok: false, reason: 'closed', closedLabel: openNow.closedLabel || 'Derzeit geschlossen' };
   const info = db.prepare(`
     INSERT INTO support_calls (caller_id, status, joined_at) VALUES (?, 'waiting', ?)
   `).run(userId, nowIso());
@@ -484,6 +533,17 @@ function setSignal(userId, callId, role, sdp) {
   return { ok: true };
 }
 
+// Genau EIN Mitarbeiter ist eingestempelt (und aktiv), der gerade frei ist?
+// Ist das der Fall, steigt die geschaetzte Wartezeit automatisch an.
+function singleActiveSupporter() {
+  return db.prepare(`
+    SELECT COUNT(*) AS c
+    FROM support_shifts s
+    JOIN users u ON u.id = s.user_id
+    WHERE s.clocked_out_at IS NULL AND u.status = 'active' AND u.role IN ('hr','hrhr')
+  `).get().c === 1;
+}
+
 // Zustand eines Anrufs für einen berechtigten Nutzer (Anrufer oder Mitarbeiter).
 function callStateFor(userId, callId) {
   const call = getCall(callId);
@@ -496,6 +556,21 @@ function callStateFor(userId, callId) {
   const staff = call.staff_id
     ? db.prepare('SELECT id, username, global_name, extension FROM users WHERE id = ?').get(call.staff_id)
     : null;
+
+  // Geschaetzte Wartezeit: Warteschlangen-Position x Faktor. Ist die Wartezeit
+  // groesser als 3 Minuten und nur EIN Supporter eingestempelt, steigt die
+  // Schätzung um 1 Minute pro weiterer Warteminute.
+  let queueWaitMinutes = null;
+  let queueWaitEscalating = false;
+  if (call.status === 'waiting') {
+    queueWaitMinutes = queuePositionOf(call.id) * getSettings().minutesPerCall;
+    const joinedMs = new Date(call.joined_at).getTime();
+    const waitedMin = Number.isNaN(joinedMs) ? 0 : Math.floor((Date.now() - joinedMs) / 60000);
+    if (waitedMin > 3 && singleActiveSupporter()) {
+      queueWaitEscalating = true;
+      queueWaitMinutes += (waitedMin - 3);
+    }
+  }
 
   return {
     ok: true,
@@ -512,9 +587,8 @@ function callStateFor(userId, callId) {
       endedAt: call.ended_at,
       endedReason: call.ended_reason,
       queuePosition: call.status === 'waiting' ? queuePositionOf(call.id) : null,
-      queueWaitMinutes: call.status === 'waiting'
-        ? queuePositionOf(call.id) * getSettings().minutesPerCall
-        : null,
+      queueWaitMinutes,
+      queueWaitEscalating,
       availableStaff: availableStaffCount(),
       offer: isCaller ? call.offer_staff : null,
       answer: isStaff ? call.answer_caller : null,
@@ -756,6 +830,7 @@ module.exports = {
   endCall,
   setSignal,
   callStateFor,
+  singleActiveSupporter,
   publicState,
   staffState,
   activeCallOf,

@@ -707,9 +707,10 @@
       startBtn.textContent = '📞 Support anrufen';
     }
     if (st.call) {
-      callId = st.call;
-      joinedAtMs = Date.now();
-      pollCall();
+      // Kein automatisches Verbinden beim Öffnen der Seite: Die Verbindung
+      // startet erst, wenn der Anrufer "Support anrufen" klickt (bzw. ein
+      // bestehender Anruf dann fortgesetzt wird).
+      text('availabilityText', 'Du hast bereits einen laufenden Anruf – klicke auf „Support anrufen“, um ihn fortzusetzen.');
     }
   }
 
@@ -722,7 +723,17 @@
       return;
     }
     const r = await post('/api/support/call/start');
-    if (!r.ok || !r.call) { alert('Der Anruf konnte nicht gestartet werden. Bitte erneut versuchen.'); return; }
+    if (!r.ok || !r.call) {
+      if (r.reason === 'closed') {
+        alert(r.closedLabel
+          ? `${r.closedLabel} – der Support ist außerhalb der Zeiten nicht erreichbar.`
+          : 'Der Support ist derzeit geschlossen.');
+      } else {
+        alert('Der Anruf konnte nicht gestartet werden. Bitte erneut versuchen.');
+      }
+      refreshIdle();
+      return;
+    }
     callId = r.call.id;
     joinedAtMs = Date.now();
     answeredOffer = null;
@@ -767,9 +778,15 @@
       // Zurueck in der Warteschlange (z. B. nach Weiterleitung) -> Verbindung zuruecksetzen.
       resetNegotiation();
       text('queuePositionText', `Ihre Position in der Warteschlange: ${c.queuePosition}.`);
-      text('queueWaitText', c.queueWaitMinutes
-        ? `Geschätzte Wartezeit: ca. ${c.queueWaitMinutes} Minute${c.queueWaitMinutes === 1 ? '' : 'n'} (steigt mit jeder wartenden Anfrage).`
-        : '');
+      if (c.queueWaitMinutes) {
+        const escNote = c.queueWaitEscalating
+          ? ' Nur ein Mitarbeiter ist eingestempelt – die Wartezeit steigt um 1 Minute pro Warteminute.'
+          : ' Steigt mit jeder wartenden Anfrage.';
+        text('queueWaitText',
+          `Geschätzte Wartezeit: ca. ${c.queueWaitMinutes} Minute${c.queueWaitMinutes === 1 ? '' : 'n'}.${escNote}`);
+      } else {
+        text('queueWaitText', '');
+      }
       return;
     }
     if (c.status === 'ringing') {
