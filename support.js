@@ -514,8 +514,8 @@ function acceptCall(staffId, callId) {
 
 // Aktiven Anruf weiterleiten. Mit `targetStaffId` erfolgt eine gezielte
 // Weiterleitung an einen bestimmten Mitarbeiter (mit Busy-Check); ohne Auswahl
-// geht der Anruf zurück in die Warteschlange (Anrufer bleibt vorn) und wird
-// an den nächsten freien Mitarbeiter zugewiesen.
+// geht der Anruf an den nächsten freien Mitarbeiter (Anrufer bleibt vorn in der
+// Warteschlange). Ist keiner frei, endet der Anruf automatisch.
 function transferCall(staffId, callId, targetStaffId) {
   const call = getCall(callId);
   if (!call) return { ok: false, reason: 'notfound' };
@@ -555,9 +555,19 @@ function transferCall(staffId, callId, targetStaffId) {
         offer_staff = NULL, answer_caller = NULL, transfer_target_id = NULL
     WHERE id = ?
   `).run(call.id);
+  assignWaitingCalls({ excludeStaffId: staffId });
+  // Wird der Anruf nicht sofort an einen freien Mitarbeiter übergeben (z. B.
+  // weil keiner eingestempelt ist), endet er automatisch – statt ewig in der
+  // Warteschlange zu hängen. Gezielte Weiterleitungen enden über den Klingel-
+  // Timeout (siehe runScheduler).
+  const after = getCall(call.id);
+  if (after.status === 'waiting') {
+    endCallInternal(call.id, 'ended', 'Kein freier Mitarbeiter verfügbar – weitergeleiteter Anruf beendet');
+    whatsappNotify(`${who} hat ${callDisplayNumber(call.id)} weitergeleitet – kein freier Mitarbeiter verfügbar, Anruf beendet.`);
+    return { ok: true, targeted: false, ended: true };
+  }
   whatsappNotify(`${who} hat ${callDisplayNumber(call.id)} weitergeleitet – Anrufer bleibt vorn in der Warteschlange.`);
-  const assigned = assignWaitingCalls({ excludeStaffId: staffId });
-  return { ok: true, targeted: false, reassigned: assigned > 0 };
+  return { ok: true, targeted: false, reassigned: true };
 }
 
 function endCallInternal(callId, status, reason) {

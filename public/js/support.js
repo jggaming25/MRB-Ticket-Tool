@@ -15,7 +15,8 @@
 //   3. Der Mitarbeiter erstellt das WebRTC-Angebot (offer), der Anrufer
 //      antwortet (answer) -> Verbindung steht, beide reden sofort los.
 //   4. Der Mitarbeiter kann den Anruf an den nächsten freien Mitarbeiter
-//      weiterleiten; der Anrufer bleibt dabei vorn in der Warteschlange.
+//      weiterleiten; der Anrufer bleibt dabei vorn in der Warteschlange. Ist
+//      kein freier Mitarbeiter verfügbar, endet der Anruf automatisch.
 // ---------------------------------------------------------------------------
 (function () {
   const STAFF = window.SUPPORT_STAFF === true;

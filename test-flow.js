@@ -1040,17 +1040,41 @@ function findMail(subjectPart) {
     st.call.queueWaitEscalating === true && st.call.queueWaitMinutes === 5,
     `queueWaitMinutes=${st.call.queueWaitMinutes}`);
 
-  // Weiterleitung: aktiven Anruf an den naechsten freien Mitarbeiter weitergeben.
+  // Weiterleitung ohne Ziel: Der nächste freie Mitarbeiter übernimmt den Anruf.
+  // Ist keiner verfügbar (hier ist nur der weiterleitende HR eingestempelt),
+  // endet der Anruf automatisch statt ewig in der Warteschlange zu hängen.
   r = await postJson('/api/support/call/' + callId + '/transfer', {}, hrCookie);
-  const tr = JSON.parse(r.body);
-  const trRow = db.prepare('SELECT status, staff_id FROM support_calls WHERE id = ?').get(callId);
-  ok('Support: Anruf wird weitergeleitet (zurueck in die Warteschlange)', tr.ok === true && trRow.status === 'waiting' && trRow.staff_id === null);
-  // Fuer die spaeteren Aufzeichnungs-Tests nimmt der HR den Anruf wieder an.
-  const reaccept = support.acceptCall(hrUser.id, callId);
-  ok('Support: Anruf nach Weiterleitung erneut annehmbar', reaccept.ok === true);
+  const trQueue = JSON.parse(r.body);
+  const trQueueRow = db.prepare('SELECT status, staff_id, ended_reason FROM support_calls WHERE id = ?').get(callId);
+  ok('Support: Weiterleitung ohne freien Mitarbeiter endet automatisch',
+    trQueue.ok === true && trQueueRow.status === 'ended' && /kein freier Mitarbeiter verfügbar/i.test(trQueueRow.ended_reason || ''),
+    `status=${trQueueRow.status} reason=${trQueueRow.ended_reason}`);
+  // Zweiten Anrufer (Warteschleifen-Test) beenden, damit die Weiterleitung
+  // eindeutig an den naechsten freien Mitarbeiter geht.
+  support.endCall(lockUser.id, s2.call.id);
+  // Anruf fuer die Weiterleitungs-Tests wieder dem HR zuordnen.
+  db.prepare(`
+    UPDATE support_calls
+    SET staff_id = ?, status = 'active', assigned_at = ?, started_at = ?,
+        offer_staff = NULL, answer_caller = NULL, transfer_target_id = NULL
+    WHERE id = ?
+  `).run(hrUser.id, new Date().toISOString(), new Date().toISOString(), callId);
+  await postJson('/api/support/clockin', {}, hrhrCookie);
+  r = await postJson('/api/support/call/' + callId + '/transfer', {}, hrCookie);
+  const trNext = JSON.parse(r.body);
+  const trNextRow = db.prepare('SELECT status, staff_id FROM support_calls WHERE id = ?').get(callId);
+  ok('Support: Weiterleitung übernimmt der nächste freie Mitarbeiter',
+    trNext.ok === true && trNext.reassigned === true && trNextRow.status === 'ringing' && trNextRow.staff_id === hrhrUser.id,
+    `status=${trNextRow.status} staff=${trNextRow.staff_id}`);
+  // Für die gezielte-Weiterleitung-Tests wieder dem HR zuordnen.
+  db.prepare(`
+    UPDATE support_calls
+    SET staff_id = ?, status = 'active', assigned_at = ?, started_at = ?,
+        offer_staff = NULL, answer_caller = NULL, transfer_target_id = NULL
+    WHERE id = ?
+  `).run(hrUser.id, new Date().toISOString(), new Date().toISOString(), callId);
 
   // Gezielte Weiterleitung: Ziel-Auswahl, Busy-Check, Auto-Beenden.
-  await postJson('/api/support/clockin', {}, hrhrCookie);
   r = await get('/api/support/staff/state', hrCookie);
   st = JSON.parse(r.body);
   ok('Support: Staff-State listet Weiterleitungs-Ziele mit Busy-Status',
